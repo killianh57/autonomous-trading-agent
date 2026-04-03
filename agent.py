@@ -1,7 +1,6 @@
 import os
 import time
 import threading
-import schedule
 import requests
 import anthropic
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -25,10 +24,14 @@ AGGRESSIVE_ASSETS = ["NVDA", "TSLA", "AAPL"]
 DCA_MONTHLY_EUR   = 200
 SAFE_RATIO        = 0.60
 AGGRESSIVE_RATIO  = 0.40
+POLL_INTERVAL     = 300  # 5 minutes
 
-trading_client = TradingClient(ALPACA_API_KEY, ALPACA_SECRET_KEY, paper=True)
+trading_client = TradingClient(ALPACA_API_KEY, ALPACA_SECRET_KEY, paper=False)
 data_client    = StockHistoricalDataClient(ALPACA_API_KEY, ALPACA_SECRET_KEY)
 claude         = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+
+# Mémoire des dernières news vues
+last_seen_news = {}
 
 def log(msg):
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}")
@@ -48,13 +51,26 @@ def start_health_server():
 
 def get_news(ticker):
     try:
-        url = f"https://newsapi.org/v2/everything?q={ticker}&language=en&pageSize=5&apiKey={NEWS_API_KEY}"
+        url = f"https://newsapi.org/v2/everything?q={ticker}&language=en&sortBy=publishedAt&pageSize=5&apiKey={NEWS_API_KEY}"
         res = requests.get(url, timeout=10)
         articles = res.json().get("articles", [])
-        return "\n".join([f"- {a['title']}" for a in articles[:5]])
+        return articles
     except Exception as e:
         log(f"News error {ticker}: {e}")
-        return "Aucune news."
+        return []
+
+def has_new_news(ticker, articles):
+    """Retourne True si des nouvelles news sont détectées."""
+    if not articles:
+        return False
+    latest = articles[0].get("publishedAt", "")
+    if last_seen_news.get(ticker) != latest:
+        last_seen_news[ticker] = latest
+        return True
+    return False
+
+def format_news(articles):
+    return "\n".join([f"- {a['title']}" for a in articles[:5]])
 
 def get_account_info():
     account = trading_client.get_account()
@@ -96,7 +112,7 @@ Réponds UNIQUEMENT en JSON :
 def analyze_with_claude(ticker, price, news):
     try:
         import json
-        res  = claude.messages.create(
+        res = claude.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=300,
             system=SYSTEM_PROMPT,
@@ -108,33 +124,37 @@ def analyze_with_claude(ticker, price, news):
         log(f"Claude error {ticker}: {e}")
         return {"action":"HOLD","confidence":0,"reason":"Erreur","risk_percent":0}
 
-def run_trading_session():
-    log("🚀 Session de trading")
+def analyze_ticker(ticker):
+    """Analyse un ticker et trade si signal fort."""
+    price = get_price(ticker)
+    if not price:
+        return
+    articles = get_news(ticker)
+    if not has_new_news(ticker, articles):
+        return  # Pas de nouvelles news → on skip
+    log(f"🔔 Nouvelles news détectées pour {ticker} !")
+    news    = format_news(articles)
+    signal  = analyze_with_claude(ticker, price, news)
+    action  = signal.get("action", "HOLD")
+    conf    = signal.get("confidence", 0)
+    log(f"📊 {ticker}: {action} ({conf}%) — {signal.get('reason','')}")
+    if conf < 65:
+        return
     account = get_account_info()
     pv      = account["equity"]
-    log(f"💼 Portefeuille: ${pv:.2f}")
-    for ticker in SAFE_ASSETS + AGGRESSIVE_ASSETS:
-        price  = get_price(ticker)
-        if not price: continue
-        news   = get_news(ticker)
-        signal = analyze_with_claude(ticker, price, news)
-        action, conf = signal.get("action","HOLD"), signal.get("confidence",0)
-        log(f"📊 {ticker}: {action} ({conf}%) — {signal.get('reason','')}")
-        if conf < 65:
-            continue
-        if action == "BUY":
-            qty = (pv * signal.get("risk_percent",1) / 100) / price
-            if qty * price >= 1: place_order(ticker, "buy", qty)
-        elif action == "SELL":
-            pos = get_positions()
-            if ticker in pos: place_order(ticker, "sell", pos[ticker]["qty"])
-        time.sleep(2)
-    log("✅ Session terminée")
+    if action == "BUY":
+        qty = (pv * signal.get("risk_percent", 1) / 100) / price
+        if qty * price >= 1:
+            place_order(ticker, "buy", qty)
+    elif action == "SELL":
+        pos = get_positions()
+        if ticker in pos:
+            place_order(ticker, "sell", pos[ticker]["qty"])
 
 def run_dca():
     log("💰 DCA mensuel")
-    account = get_account_info()
-    dca_usd = DCA_MONTHLY_EUR * 1.08
+    account  = get_account_info()
+    dca_usd  = DCA_MONTHLY_EUR * 1.08
     if account["cash"] < dca_usd:
         log("⚠️ Cash insuffisant")
         return
@@ -148,17 +168,20 @@ def run_dca():
     log("✅ DCA exécuté")
 
 def main():
-    log("🤖 Agent démarré — 60% VT / 40% NVDA,TSLA,AAPL — DCA 200€/mois")
+    log("🤖 Agent démarré — polling news toutes les 5 min")
     t = threading.Thread(target=start_health_server, daemon=True)
     t.start()
-    log("🌐 Health server démarré")
-    schedule.every().day.at("15:30").do(run_trading_session)
-    schedule.every().day.at("20:00").do(run_trading_session)
-    schedule.every().day.at("16:00").do(lambda: run_dca() if datetime.now().day == 1 else None)
-    run_trading_session()
+
     while True:
-        schedule.run_pending()
-        time.sleep(60)
+        now = datetime.now()
+        # DCA le 1er du mois à 16h
+        if now.day == 1 and now.hour == 16 and now.minute < 5:
+            run_dca()
+        # Analyser tous les actifs
+        for ticker in SAFE_ASSETS + AGGRESSIVE_ASSETS:
+            analyze_ticker(ticker)
+        log(f"⏳ Prochain polling dans {POLL_INTERVAL//60} min...")
+        time.sleep(POLL_INTERVAL)
 
 if __name__ == "__main__":
     main()
