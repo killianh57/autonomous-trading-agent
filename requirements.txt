@@ -5,3 +5,5 @@ requests==2.31.0
 python-dotenv==1.0.0
 pandas==2.2.0
 numpy==1.26.4
+coinbase-advanced-py==1.4.0
+
