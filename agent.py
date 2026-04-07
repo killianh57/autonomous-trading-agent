@@ -85,15 +85,15 @@ ANNUAL_GOAL_PCT  = 20.0
 DCA_MONTHLY_EUR  = 100
 MEMORY_FILE      = "trade_memory.json"
 
-INTERVAL_CRYPTO    = 300 # 5 min pour soulager l'API
-INTERVAL_STOCKS    = 300 # 5 min pour soulager l'API
+INTERVAL_CRYPTO    = 300 
+INTERVAL_STOCKS    = 300 
 INTERVAL_RISK      = 30
 INTERVAL_SCHEDULER = 60
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# CLIENTS (PAPER TRADING ACTIVÉ POUR SÉCURITÉ)
+# CLIENTS (LIVE TRADING)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-trading_client = TradingClient(ALPACA_API_KEY, ALPACA_SECRET_KEY, paper=True)
+trading_client = TradingClient(ALPACA_API_KEY, ALPACA_SECRET_KEY, paper=False)
 data_client    = StockHistoricalDataClient(ALPACA_API_KEY, ALPACA_SECRET_KEY)
 claude_client  = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
@@ -873,7 +873,7 @@ def cmd_status():
     eth_val   = get_crypto_balance("ETH") * (get_crypto_price("ETH-USD") or 0)
 
     send_telegram(
-        f"💼 <b>Portefeuille (PAPER)</b>\n\n"
+        f"💼 <b>Portefeuille</b>\n\n"
         f"💰 Actions : <b>${account['equity']:.2f}</b>\n"
         f"₿ Crypto hold : ~${btc_val+eth_val:.2f}\n"
         f"💵 Cash : ${account['cash']:.2f}\n"
@@ -1108,7 +1108,6 @@ def thread_risk():
     while True:
         try:
             check_custom_alerts()
-            # La boucle check_risk locale n'est plus nécessaire pour les actions (géré par Bracket Orders)
         except Exception as e: record_error(f"thread_risk: {e}")
         time.sleep(INTERVAL_RISK)
 
@@ -1154,7 +1153,7 @@ def main():
     send_telegram(
         "🤖 <b>Trading Agent V2 Démarré !</b>\n\n"
         "━━━━━━━━━━━━━━━━━━━━━\n"
-        "📈 <b>ALPACA (MODE PAPER ACTIF)</b>\n"
+        "📈 <b>ALPACA (LIVE ACTIF)</b>\n"
         "🔒 Hold 60% — Claude choisit dynamiquement\n"
         "⚡ Trade 40% — Ordres Bracket (SL/TP gérés par Alpaca)\n\n"
         "₿ <b>COINBASE</b>\n"
