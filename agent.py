@@ -7,8 +7,8 @@ import anthropic
 import re
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from alpaca.trading.client import TradingClient
-from alpaca.trading.requests import MarketOrderRequest
-from alpaca.trading.enums import OrderSide, TimeInForce
+from alpaca.trading.requests import MarketOrderRequest, TakeProfitRequest, StopLossRequest
+from alpaca.trading.enums import OrderSide, TimeInForce, OrderClass
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockLatestBarRequest, StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
@@ -21,7 +21,6 @@ load_dotenv()
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # CONFIGURATION
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
 ALPACA_API_KEY    = os.getenv("ALPACA_API_KEY")
 ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
@@ -33,17 +32,14 @@ COINBASE_SECRET   = os.getenv("COINBASE_SECRET_KEY")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # PORTEFEUILLE ALPACA
-# 🔒 HOLD 60%  — Claude choisit dynamiquement
-# ⚡ TRADE 40% — Long/Short, tout Alpaca, illimité/jour
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
 HOLD_PCT              = 0.60
 DAYTRADE_PCT          = 0.40
 MAX_HOLD_POSITIONS    = 8
 MAX_DAYTRADE_POSITIONS = 4
 STOCK_SL_PCT          = 3.0
 STOCK_TP_PCT          = 6.0
-MIN_CONFIDENCE        = 72
+MIN_CONFIDENCE        = 75
 
 DAYTRADE_UNIVERSE = [
     "AAPL","MSFT","NVDA","AMZN","GOOGL","META","TSLA",
@@ -59,11 +55,7 @@ DAYTRADE_UNIVERSE = [
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # PORTEFEUILLE COINBASE
-# 🔒 HOLD STRICT 40% — BTC 25% | ETH 15% (jamais vendus)
-# 🔒 HOLD SOUPLE 10% — SOL 5% | XRP 3% | LINK 2%
-# ⚡ TRADE 50%       — Toute la crypto 24/7
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
 CRYPTO_HOLD_STRICT = ["BTC-USD", "ETH-USD"]
 CRYPTO_HOLD_SOUPLE = ["SOL-USD", "XRP-USD", "LINK-USD"]
 CRYPTO_HOLD_ALL    = CRYPTO_HOLD_STRICT + CRYPTO_HOLD_SOUPLE
@@ -85,25 +77,23 @@ CRYPTO_UNIVERSE = [
 ]
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# OBJECTIFS
+# OBJECTIFS ET TIMERS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
 WEEKLY_GOAL_PCT  = 1.0
 MONTHLY_GOAL_EUR = 100
 ANNUAL_GOAL_PCT  = 20.0
 DCA_MONTHLY_EUR  = 100
 MEMORY_FILE      = "trade_memory.json"
 
-INTERVAL_CRYPTO    = 60
-INTERVAL_STOCKS    = 120
+INTERVAL_CRYPTO    = 300 # 5 min pour soulager l'API
+INTERVAL_STOCKS    = 300 # 5 min pour soulager l'API
 INTERVAL_RISK      = 30
 INTERVAL_SCHEDULER = 60
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# CLIENTS
+# CLIENTS (PAPER TRADING ACTIVÉ POUR SÉCURITÉ)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-trading_client = TradingClient(ALPACA_API_KEY, ALPACA_SECRET_KEY, paper=False)
+trading_client = TradingClient(ALPACA_API_KEY, ALPACA_SECRET_KEY, paper=True)
 data_client    = StockHistoricalDataClient(ALPACA_API_KEY, ALPACA_SECRET_KEY)
 claude_client  = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
@@ -116,11 +106,9 @@ except Exception as e:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # ÉTAT GLOBAL
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
 trading_paused       = False
 vacation_mode        = False
 custom_alerts        = {}
-last_seen_news       = {}
 active_stock_trades  = {}
 active_crypto_trades = {}
 _lock                = threading.Lock()
@@ -128,7 +116,6 @@ _lock                = threading.Lock()
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # UTILITAIRES
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
 def progress_bar(current, goal, length=10):
     if goal == 0: return "░" * length
     pct    = min(current / goal, 1.0)
@@ -151,14 +138,12 @@ def send_telegram(msg):
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # MÉMOIRE
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
 def load_memory():
     if os.path.exists(MEMORY_FILE):
         try:
             with open(MEMORY_FILE, "r") as f:
                 return json.load(f)
-        except:
-            pass # Si le fichier est corrompu, on initialise
+        except: pass
     return {
         "trades": [], "hold_portfolio": {},
         "stats": {"wins": 0, "losses": 0, "total_pnl": 0},
@@ -168,7 +153,6 @@ def load_memory():
 
 def save_memory(memory):
     with _lock:
-        # Écriture atomique simulée
         tmp_file = MEMORY_FILE + ".tmp"
         with open(tmp_file, "w") as f:
             json.dump(memory, f, indent=2)
@@ -251,7 +235,6 @@ def get_best_worst(trades):
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # DONNÉES MARCHÉ
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
 def is_market_open():
     try:
         clock = trading_client.get_clock()
@@ -311,7 +294,6 @@ def get_spy_perf(): return get_market_perf("SPY")
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # ANALYSE TECHNIQUE
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
 def get_historical_prices(ticker, days=60):
     try:
         req = StockBarsRequest(symbol_or_symbols=ticker, timeframe=TimeFrame.Day,
@@ -373,7 +355,6 @@ def format_ta(ta):
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # NEWS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
 def get_news(ticker, count=5):
     try:
         q = ticker.replace("-USD","").replace("USDT","")
@@ -390,11 +371,10 @@ def format_news(articles, count=3):
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # CLAUDE IA
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
 PROMPT_HOLD = """Tu es un gestionnaire de portefeuille long terme.
 Tu choisis dynamiquement les meilleurs actifs selon l'actu, les fondamentaux et le momentum.
 Horizons possibles : court (semaines), moyen (mois), long (années) — choisis selon l'opportunité.
-Univers : toutes les actions US, ETF sectoriels, ETF internationaux tradables sur Alpaca.
+Univers : toutes les actions US tradables sur Alpaca.
 Réponds UNIQUEMENT en JSON :
 {"action":"BUY"|"SELL"|"HOLD","symbol":"TICKER","horizon":"court"|"moyen"|"long","confidence":0-100,"reason":"français court","allocation_pct":1-10}
 Si aucune opportunité : {"action":"HOLD","symbol":"","horizon":"","confidence":0,"reason":"pas d'opportunité","allocation_pct":0}"""
@@ -407,7 +387,7 @@ Réponds UNIQUEMENT en JSON :
 {"action":"BUY"|"SHORT"|"HOLD","confidence":0-100,"reason":"français court","risk_pct":1-2,"tp_pct":3-15}"""
 
 PROMPT_CRYPTO = """Tu es un day trader crypto professionnel — analyse 24/7.
-Long + Short selon le setup. Minimum 70 de confiance pour agir.
+Long + Short selon le setup. Minimum 75 de confiance pour agir.
 Taille max : 5% du capital de trading par position.
 Réponds UNIQUEMENT en JSON :
 {"action":"BUY"|"SHORT"|"HOLD","confidence":0-100,"reason":"français court","risk_pct":1-5,"tp_pct":5-30}"""
@@ -419,7 +399,6 @@ def ask_claude(prompt, user_msg):
             messages=[{"role":"user","content":user_msg}]
         )
         raw = res.content[0].text.strip()
-        # Regex pour attraper le JSON même si Claude ajoute du texte autour
         match = re.search(r'\{.*\}', raw, re.DOTALL)
         if match:
             return json.loads(match.group(0))
@@ -429,10 +408,40 @@ def ask_claude(prompt, user_msg):
         return {"action":"HOLD","confidence":0,"reason":"Erreur Claude"}
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# ORDRES ALPACA
+# ORDRES ALPACA (BRACKET)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def place_order_bracket(symbol, side, qty, tp_pct, label="", reason=""):
+    try:
+        price = get_price(symbol)
+        if not price: return
+        
+        # SL et TP
+        sl_price = round(price * (1 - STOCK_SL_PCT/100), 2)
+        tp_price = round(price * (1 + tp_pct/100), 2)
+        order_side = OrderSide.BUY if side == "buy" else OrderSide.SELL
 
-def place_order(symbol, side, qty, tp_pct=None, label=""):
+        req = MarketOrderRequest(
+            symbol=symbol, qty=round(abs(qty),4), side=order_side,
+            time_in_force=TimeInForce.DAY,
+            order_class=OrderClass.BRACKET,
+            take_profit=TakeProfitRequest(limit_price=tp_price),
+            stop_loss=StopLossRequest(stop_price=sl_price)
+        )
+        trading_client.submit_order(req)
+        
+        valeur = round(abs(qty)*price, 2)
+        record_trade(symbol, side, round(abs(qty),4), price)
+        
+        with _lock:
+            active_stock_trades[symbol] = {"side":side, "entry":price, "tp_pct":tp_pct, "reason":reason}
+            
+        send_telegram(f"⚡ <b>ORDRE BRACKET {label}</b> <b>{symbol}</b>\n💵 ~${valeur}\n🎯 TP: ${tp_price} (+{tp_pct}%)\n🛑 SL: ${sl_price} (-{STOCK_SL_PCT}%)\n\n<i>L'ordre est géré par Alpaca.</i>")
+    except Exception as e:
+        record_error(f"Order {symbol}: {e}")
+        send_telegram(f"❌ <b>Ordre échoué</b> {symbol}\n{str(e)[:100]}")
+
+# Fonction générique pour vendre au marché (Hold / Urgence)
+def place_order(symbol, side, qty, label=""):
     try:
         order_side = OrderSide.BUY if side == "buy" else OrderSide.SELL
         trading_client.submit_order(MarketOrderRequest(
@@ -444,38 +453,16 @@ def place_order(symbol, side, qty, tp_pct=None, label=""):
         record_trade(symbol, side, round(abs(qty),4), price or 0)
         
         with _lock:
-            if side == "buy":
-                active_stock_trades[symbol] = {"side":"long","qty":qty,"entry":price,"tp_pct":tp_pct or STOCK_TP_PCT}
-                send_telegram(f"✅ <b>LONG {label}</b> <b>{symbol}</b>\n💵 ~${valeur}\n🛑 -{STOCK_SL_PCT}% | 🎯 +{tp_pct or STOCK_TP_PCT}%")
-            else:
-                active_stock_trades.pop(symbol, None)
-                send_telegram(f"💰 <b>Clôture {label}</b> <b>{symbol}</b> ~${valeur}")
+            active_stock_trades.pop(symbol, None)
+        send_telegram(f"💰 <b>Ordre {label}</b> <b>{symbol}</b> ~${valeur}")
     except Exception as e:
         record_error(f"Order {symbol}: {e}")
         send_telegram(f"❌ <b>Ordre échoué</b> {symbol}\n{str(e)[:100]}")
 
-def open_short(symbol, qty, tp_pct=None):
-    try:
-        trading_client.submit_order(MarketOrderRequest(
-            symbol=symbol, qty=round(abs(qty),4),
-            side=OrderSide.SELL, time_in_force=TimeInForce.DAY
-        ))
-        price  = get_price(symbol)
-        valeur = round(abs(qty)*price,2) if price else "?"
-        record_trade(symbol, "short", round(abs(qty),4), price or 0)
-        
-        with _lock:
-            active_stock_trades[symbol] = {"side":"short","qty":qty,"entry":price,"tp_pct":tp_pct or STOCK_TP_PCT}
-        send_telegram(f"🔻 <b>SHORT Day Trade</b> <b>{symbol}</b>\n💵 ~${valeur}\n🛑 +{STOCK_SL_PCT}% | 🎯 -{tp_pct or STOCK_TP_PCT}%")
-    except Exception as e:
-        record_error(f"Short {symbol}: {e}")
-        send_telegram(f"❌ <b>Short échoué</b> {symbol}\n{str(e)[:100]}")
-
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # ORDRES COINBASE
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-def place_crypto_order(symbol, side, amount_usd, tp_pct=None, label=""):
+def place_crypto_order(symbol, side, amount_usd, tp_pct=None, label="", reason=""):
     try:
         if not coinbase: return
         if side == "buy":
@@ -495,7 +482,7 @@ def place_crypto_order(symbol, side, amount_usd, tp_pct=None, label=""):
         
         with _lock:
             if side == "buy":
-                active_crypto_trades[symbol] = {"side":"long","amount":amount_usd,"entry":price,"tp_pct":tp_pct or CRYPTO_TP_PCT}
+                active_crypto_trades[symbol] = {"side":"long","amount":amount_usd,"entry":price,"tp_pct":tp_pct or CRYPTO_TP_PCT, "reason":reason}
                 send_telegram(f"✅ <b>LONG {label}</b> 💎 <b>{symbol}</b>\n💵 ~${amount_usd:.2f}\n🛑 -{CRYPTO_SL_PCT}% | 🎯 +{tp_pct or CRYPTO_TP_PCT}%")
             else:
                 active_crypto_trades.pop(symbol, None)
@@ -507,7 +494,6 @@ def place_crypto_order(symbol, side, amount_usd, tp_pct=None, label=""):
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # POCHE HOLD — ALPACA
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
 def manage_hold_portfolio():
     if trading_paused or vacation_mode or not is_market_open(): return
     account   = get_account_info()
@@ -557,9 +543,8 @@ def manage_hold_portfolio():
         place_order(symbol, "sell", hold_pos[symbol]["qty"], label="Hold")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# DAY TRADING — ALPACA
+# DAY TRADING — ALPACA (AVEC FILTRE RSI)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
 def scan_stocks():
     if trading_paused or vacation_mode or not is_market_open(): return
     account   = get_account_info()
@@ -572,10 +557,13 @@ def scan_stocks():
 
     for ticker in DAYTRADE_UNIVERSE:
         if ticker in positions: continue
-        price    = get_price(ticker)
-        if not price: continue
-        articles = get_news(ticker, count=3)
-        ta       = get_ta(ticker)
+        price = get_price(ticker)
+        ta    = get_ta(ticker)
+        
+        # FILTRE: N'appelle Claude que si RSI survendu ou suracheté (économie d'API)
+        if not price or not ta or (40 < ta['rsi'] < 60): continue
+
+        articles = get_news(ticker, count=2)
         wr       = get_winrate(ticker)
 
         signal = ask_claude(PROMPT_STOCKS,
@@ -589,23 +577,21 @@ def scan_stocks():
         reason = signal.get("reason","")
         tp_pct = signal.get("tp_pct", STOCK_TP_PCT)
         risk   = signal.get("risk_pct", 1)
+        
         if conf < MIN_CONFIDENCE: continue
         qty = (trade_capital * risk / 100) / price
 
         if action == "BUY" and account["cash"] >= qty * price:
-            send_telegram(f"💡 <b>Signal LONG</b>\n<b>{ticker}</b> ${price:.2f}\n{reason}\nConfiance : {conf}% | 🎯 +{tp_pct}%")
-            place_order(ticker, "buy", qty, tp_pct=tp_pct, label="Day Trade")
-            break
+            place_order_bracket(ticker, "buy", qty, tp_pct=tp_pct, label="Day Trade", reason=reason)
+            break # Un seul par scan
         elif action == "SHORT":
-            send_telegram(f"💡 <b>Signal SHORT</b>\n<b>{ticker}</b> ${price:.2f}\n{reason}\nConfiance : {conf}% | 🎯 -{tp_pct}%")
-            open_short(ticker, qty, tp_pct=tp_pct)
+            place_order_bracket(ticker, "sell", qty, tp_pct=tp_pct, label="Short Trade", reason=reason)
             break
         time.sleep(0.5)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# DAY TRADING — CRYPTO 24/7
+# DAY TRADING — CRYPTO 24/7 (AVEC FILTRE RSI)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
 def scan_crypto():
     if trading_paused or vacation_mode or not coinbase: return
     if len(active_crypto_trades) >= MAX_CRYPTO_POSITIONS: return
@@ -618,10 +604,12 @@ def scan_crypto():
 
     for symbol in CRYPTO_UNIVERSE:
         if symbol in active_crypto_trades: continue
-        price    = get_crypto_price(symbol)
-        if not price: continue
-        articles = get_news(symbol, count=3)
-        ta       = get_crypto_ta(symbol)
+        price = get_crypto_price(symbol)
+        ta    = get_crypto_ta(symbol)
+        
+        if not price or not ta or (40 < ta['rsi'] < 60): continue
+
+        articles = get_news(symbol, count=2)
         wr       = get_winrate(symbol)
 
         signal = ask_claude(PROMPT_CRYPTO,
@@ -635,43 +623,21 @@ def scan_crypto():
         reason = signal.get("reason","")
         tp_pct = signal.get("tp_pct", CRYPTO_TP_PCT)
         risk   = signal.get("risk_pct", 2)
+        
         if conf < MIN_CONFIDENCE: continue
         amount = trade_cap * risk / 100
         if amount < 5: continue
 
         if action == "BUY":
-            send_telegram(f"💡 <b>Signal LONG crypto</b>\n💎 <b>{symbol}</b> ${price:.4f}\n{reason}\nConfiance : {conf}% | 🎯 +{tp_pct}%")
-            place_crypto_order(symbol, "buy", amount, tp_pct=tp_pct, label="Day Trade")
+            place_crypto_order(symbol, "buy", amount, tp_pct=tp_pct, label="Day Trade", reason=reason)
             break
         time.sleep(0.3)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# GESTION DU RISQUE
+# GESTION DU RISQUE (CRYPTO ET ALERTES UNIQUEMENT)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-def check_risk():
-    positions = get_positions()
-    hold_syms = set(load_memory().get("hold_portfolio", {}).keys())
-    for symbol, data in positions.items():
-        if symbol in hold_syms: continue
-        pnl_pct = data["pnl_pct"]
-        trade   = active_stock_trades.get(symbol, {})
-        tp_pct  = trade.get("tp_pct", STOCK_TP_PCT)
-        side    = trade.get("side","long")
-        if side == "long":
-            if pnl_pct <= -STOCK_SL_PCT:
-                send_telegram(f"🛑 <b>Stop Loss</b> <b>{symbol}</b> -{abs(pnl_pct):.1f}%")
-                place_order(symbol, "sell", data["qty"], label="SL")
-            elif pnl_pct >= tp_pct:
-                send_telegram(f"🎯 <b>Take Profit</b> <b>{symbol}</b> +{pnl_pct:.1f}%")
-                place_order(symbol, "sell", data["qty"], label="TP")
-        elif side == "short":
-            if pnl_pct <= -STOCK_SL_PCT:
-                send_telegram(f"🛑 <b>Stop Loss SHORT</b> <b>{symbol}</b> -{abs(pnl_pct):.1f}%")
-                place_order(symbol, "buy", abs(data["qty"]), label="SL")
-            elif pnl_pct >= tp_pct:
-                send_telegram(f"🎯 <b>Take Profit SHORT</b> <b>{symbol}</b> +{pnl_pct:.1f}%")
-                place_order(symbol, "buy", abs(data["qty"]), label="TP")
+# Note: Le risque action est maintenant géré par Alpaca (Bracket Orders). 
+# On garde check_crypto_risk() pour la crypto car l'API de base Coinbase est moins souple.
 
 def check_crypto_risk():
     if not coinbase: return
@@ -700,8 +666,6 @@ def check_market_health():
     elif spy <= -5:
         trading_paused = True
         send_telegram(f"⚠️ <b>Forte baisse SPY {spy:.1f}%</b>\nDay trading suspendu.")
-    elif spy <= -3:
-        send_telegram(f"📉 Marché sous tension SPY {spy:.1f}%")
 
 def check_custom_alerts():
     for symbol, target in list(custom_alerts.items()):
@@ -713,7 +677,6 @@ def check_custom_alerts():
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # DCA MENSUEL
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
 def run_dca():
     if trading_paused or vacation_mode:
         send_telegram("⏸️ DCA annulé — trading en pause."); return
@@ -723,11 +686,11 @@ def run_dca():
         amount = dca_usd * 0.70 * alloc
         if amount >= 1:
             place_crypto_order(symbol, "buy", amount, label="DCA")
+    
+    # Reste pour actions hold
     account = get_account_info()
     signal  = ask_claude(PROMPT_HOLD,
-        f"DCA mensuel de ${dca_usd*0.30:.2f} disponible.\n"
-        f"Quel actif hold actions renforcer ce mois-ci ?\n"
-        f"Positions actuelles: {list(load_memory().get('hold_portfolio',{}).keys())}"
+        f"DCA mensuel de ${dca_usd*0.30:.2f} disponible.\nQuel actif hold actions renforcer ce mois-ci ?\nPositions actuelles: {list(load_memory().get('hold_portfolio',{}).keys())}"
     )
     if signal.get("action") == "BUY" and signal.get("symbol"):
         symbol = signal["symbol"].upper()
@@ -738,7 +701,6 @@ def run_dca():
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # RAPPORTS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
 def send_daily_report(immediate=False):
     account   = get_account_info()
     positions = get_positions()
@@ -826,8 +788,6 @@ def send_monthly_report():
     r += f"📊 {len(ms.get('trades',[]))} trades"
     if total_m > 0: r += f" | {ms['wins']/total_m*100:.0f}% réussite"
     r += f"\n📈 Projection annuelle : ~${proj:+.2f}\n"
-    if mo_pnl > 0: r += f"🧾 Impôt estimé (30%) : ~${mo_pnl*0.30:.2f}\n"
-    r += "\n⚠️ Consulte un comptable."
     send_telegram(r)
 
 def send_annual_report():
@@ -846,7 +806,6 @@ def send_annual_report():
     r += f"📊 {total_y} trades"
     if total_y > 0: r += f" | {ys['wins']/total_y*100:.0f}% réussite"
     r += f"\n📈 Projection 5 ans : ~${proj_5y:.2f}\n"
-    if yr_pnl > 0: r += f"🧾 Impôt estimé (30%) : ~${yr_pnl*0.30:.2f}\n"
     r += f"\n🎯 Objectif {int(year)+1} : +${max(yr_pnl*1.2,500):.0f}\nBonne année ! 🚀"
     send_telegram(r)
 
@@ -872,7 +831,6 @@ def send_premarket_briefing():
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # COMMANDES TELEGRAM
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
 def cmd_aide():
     send_telegram(
         "🤖 <b>Commandes</b>\n\n"
@@ -880,15 +838,23 @@ def cmd_aide():
         "/crypto | /report | /historique\n"
         "/marche | /objectifs\n"
         "/technique NVDA\n\n"
+        "🤔 /pourquoi AAPL\n\n"
         "📅 /briefing | /semaine\n"
         "/mois | /annee\n\n"
         "⚙️ /pause | /resume\n"
         "/vacances | /retour\n\n"
         "🔔 /alerte BTC-USD 90000\n"
         "/alertes\n\n"
-        "🚨 /urgence — Ferme les trades\n"
-        "(la poche hold est conservée)"
+        "🚨 /urgence — Ferme les trades"
     )
+
+def cmd_pourquoi(symbol):
+    symbol = symbol.upper()
+    trade = active_stock_trades.get(symbol) or active_crypto_trades.get(symbol)
+    if trade:
+        send_telegram(f"🤔 <b>Raisonnement pour {symbol} :</b>\n\n{trade.get('reason', 'Raison non sauvegardée.')}")
+    else:
+        send_telegram(f"Aucun trade actif trouvé pour {symbol}.")
 
 def cmd_status():
     account   = get_account_info()
@@ -907,7 +873,7 @@ def cmd_status():
     eth_val   = get_crypto_balance("ETH") * (get_crypto_price("ETH-USD") or 0)
 
     send_telegram(
-        f"💼 <b>Portefeuille</b>\n\n"
+        f"💼 <b>Portefeuille (PAPER)</b>\n\n"
         f"💰 Actions : <b>${account['equity']:.2f}</b>\n"
         f"₿ Crypto hold : ~${btc_val+eth_val:.2f}\n"
         f"💵 Cash : ${account['cash']:.2f}\n"
@@ -937,7 +903,7 @@ def cmd_positions():
     hold_syms = set(load_memory().get("hold_portfolio",{}).keys())
     trade_pos = {s: d for s, d in positions.items() if s not in hold_syms}
     if not trade_pos:
-        send_telegram("⚡ Aucun trade actif."); return
+        send_telegram("⚡ Aucun trade actions actif."); return
     msg = "⚡ <b>Day Trades actifs</b>\n\n"
     for s, d in trade_pos.items():
         t = active_stock_trades.get(s,{})
@@ -1068,9 +1034,8 @@ def cmd_voir_alertes():
     send_telegram(msg)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# HANDLER TELEGRAM
+# HANDLERS & THREADS (AVEC NEWS WATCHER)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
 def handle_telegram():
     last_update_id = None
     while True:
@@ -1104,61 +1069,50 @@ def handle_telegram():
                 elif cmd == "/retour":                  cmd_retour()
                 elif cmd == "/alertes":                 cmd_voir_alertes()
                 elif cmd == "/technique" and args:      cmd_technique(args[0].upper())
+                elif cmd == "/pourquoi" and args:       cmd_pourquoi(args[0].upper())
                 elif cmd == "/alerte" and len(args)>=2: cmd_alerte(args)
         except Exception as e:
-            log(f"Telegram error: {e}")
+            pass
         time.sleep(2)
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# HEALTH SERVER (Render)
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-class HealthHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200); self.end_headers(); self.wfile.write(b"OK")
-    def log_message(self, *args): pass
-
-def start_health_server():
-    HTTPServer(("0.0.0.0", int(os.getenv("PORT",8080))), HealthHandler).serve_forever()
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# THREADS
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def thread_news_watcher():
+    """Surveille les news globales pour détecter des chocs de marché (Toutes les 20 min)"""
+    last_news_title = ""
+    while True:
+        try:
+            news = get_news("FED inflation interest rates market crash", count=1)
+            if news and news[0]['title'] != last_news_title:
+                last_news_title = news[0]['title']
+                send_telegram(f"🚨 <b>BREAKING NEWS MACRO</b>\n\n{news[0]['title']}\n<a href='{news[0]['url']}'>Lire l'article</a>")
+        except: pass
+        time.sleep(1200)
 
 def thread_crypto():
-    """Crypto 24/7 — scan + risk toutes les 60s."""
     while True:
         try:
             check_crypto_risk()
-            if not trading_paused and not vacation_mode:
-                scan_crypto()
-        except Exception as e:
-            record_error(f"thread_crypto: {e}")
+            if not trading_paused and not vacation_mode: scan_crypto()
+        except Exception as e: record_error(f"thread_crypto: {e}")
         time.sleep(INTERVAL_CRYPTO)
 
 def thread_stocks():
-    """Actions — hold + day trade toutes les 2 min (marché ouvert)."""
     while True:
         try:
             if not trading_paused and not vacation_mode and is_market_open():
                 manage_hold_portfolio()
                 scan_stocks()
-        except Exception as e:
-            record_error(f"thread_stocks: {e}")
+        except Exception as e: record_error(f"thread_stocks: {e}")
         time.sleep(INTERVAL_STOCKS)
 
 def thread_risk():
-    """Stops et TP toutes les 30s."""
     while True:
         try:
-            check_risk()
             check_custom_alerts()
-        except Exception as e:
-            record_error(f"thread_risk: {e}")
+            # La boucle check_risk locale n'est plus nécessaire pour les actions (géré par Bracket Orders)
+        except Exception as e: record_error(f"thread_risk: {e}")
         time.sleep(INTERVAL_RISK)
 
 def thread_scheduler():
-    """Rapports, DCA, santé marché toutes les 60s."""
     briefing_sent = daily_sent = weekly_sent = monthly_sent = annual_sent = None
     while True:
         try:
@@ -1185,27 +1139,30 @@ def thread_scheduler():
             record_error(f"thread_scheduler: {e}")
         time.sleep(INTERVAL_SCHEDULER)
 
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200); self.end_headers(); self.wfile.write(b"OK")
+    def log_message(self, *args): pass
+
+def start_health_server():
+    HTTPServer(("0.0.0.0", int(os.getenv("PORT",8080))), HealthHandler).serve_forever()
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # MAIN
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
 def main():
     send_telegram(
-        "🤖 <b>Trading Agent démarré !</b>\n\n"
+        "🤖 <b>Trading Agent V2 Démarré !</b>\n\n"
         "━━━━━━━━━━━━━━━━━━━━━\n"
-        "📈 <b>ALPACA</b>\n"
+        "📈 <b>ALPACA (MODE PAPER ACTIF)</b>\n"
         "🔒 Hold 60% — Claude choisit dynamiquement\n"
-        "⚡ Day Trade 40% — Long/Short toute la bourse\n"
-        f"   Max {MAX_DAYTRADE_POSITIONS} pos simultanées | illimité/jour\n\n"
+        "⚡ Trade 40% — Ordres Bracket (SL/TP gérés par Alpaca)\n\n"
         "₿ <b>COINBASE</b>\n"
         "🔒 Hold strict — BTC 25% | ETH 15%\n"
         "⚖️ Hold souple — SOL 5% | XRP 3% | LINK 2%\n"
-        "⚡ Day Trade 50% — Toute la crypto 24/7\n"
-        f"   Max {MAX_CRYPTO_POSITIONS} pos simultanées\n"
+        "⚡ Trade 50% — Avec sécurité RSI\n"
         "━━━━━━━━━━━━━━━━━━━━━\n"
-        "🛑 SL : -3% actions | -7% crypto\n"
-        "🎯 TP : dynamique par Claude\n"
-        "📊 Confiance min : 72%\n\n"
+        "⚠️ <i>Filtre anti-requêtes excessives activé.</i>\n"
         "Tape /aide 👇"
     )
 
@@ -1219,14 +1176,14 @@ def main():
     threading.Thread(target=thread_stocks,       daemon=True).start()
     threading.Thread(target=thread_risk,         daemon=True).start()
     threading.Thread(target=thread_scheduler,    daemon=True).start()
+    threading.Thread(target=thread_news_watcher, daemon=True).start()
 
     log("✅ Tous les threads démarrés.")
 
     while True:
         time.sleep(60)
         log(f"💓 Alive | {'OUVERT' if is_market_open() else 'fermé'} | "
-            f"{'⏸️ PAUSE' if trading_paused else '✅ ACTIF'} | "
-            f"Stocks: {len(active_stock_trades)} | Crypto: {len(active_crypto_trades)}")
+            f"{'⏸️ PAUSE' if trading_paused else '✅ ACTIF'}")
 
 if __name__ == "__main__":
     main()
