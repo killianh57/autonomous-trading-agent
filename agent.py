@@ -31,10 +31,8 @@ COINBASE_API_KEY  = os.getenv("COINBASE_API_KEY")
 COINBASE_SECRET   = os.getenv("COINBASE_SECRET_KEY")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# PORTEFEUILLE ALPACA
+# PARAMÈTRES ALPACA
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-HOLD_PCT              = 0.60
-DAYTRADE_PCT          = 0.40
 MAX_HOLD_POSITIONS    = 8
 MAX_DAYTRADE_POSITIONS = 4
 STOCK_SL_PCT          = 3.0
@@ -54,7 +52,7 @@ DAYTRADE_UNIVERSE = [
 ]
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# PORTEFEUILLE COINBASE
+# PARAMÈTRES COINBASE
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 CRYPTO_HOLD_STRICT = ["BTC-USD", "ETH-USD"]
 CRYPTO_HOLD_SOUPLE = ["SOL-USD", "XRP-USD", "LINK-USD"]
@@ -63,8 +61,6 @@ CRYPTO_HOLD_ALLOC  = {
     "BTC-USD": 0.25, "ETH-USD": 0.15,
     "SOL-USD": 0.05, "XRP-USD": 0.03, "LINK-USD": 0.02,
 }
-CRYPTO_HOLD_PCT      = 0.50
-CRYPTO_TRADE_PCT     = 0.50
 MAX_CRYPTO_POSITIONS = 3
 CRYPTO_SL_PCT        = 7.0
 CRYPTO_TP_PCT        = 12.0
@@ -369,28 +365,24 @@ def format_news(articles, count=3):
     return "\n".join([f"- {a['title']}" for a in articles[:count]]) or "Aucune news récente"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# CLAUDE IA
+# CLAUDE IA (PROMPTS MODIFIÉS POUR UTILISER LE CASH)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 PROMPT_HOLD = """Tu es un gestionnaire de portefeuille long terme.
-Tu choisis dynamiquement les meilleurs actifs selon l'actu, les fondamentaux et le momentum.
-Horizons possibles : court (semaines), moyen (mois), long (années) — choisis selon l'opportunité.
+Choisis dynamiquement les meilleurs actifs selon l'actu et le momentum.
 Univers : toutes les actions US tradables sur Alpaca.
 Réponds UNIQUEMENT en JSON :
-{"action":"BUY"|"SELL"|"HOLD","symbol":"TICKER","horizon":"court"|"moyen"|"long","confidence":0-100,"reason":"français court","allocation_pct":1-10}
+{"action":"BUY"|"HOLD","symbol":"TICKER","horizon":"court"|"moyen"|"long","confidence":0-100,"reason":"français court","allocation_pct":10-50}
 Si aucune opportunité : {"action":"HOLD","symbol":"","horizon":"","confidence":0,"reason":"pas d'opportunité","allocation_pct":0}"""
 
 PROMPT_STOCKS = """Tu es un day trader professionnel — actions US.
-Long + Short selon le setup. RR minimum 1:2. Max 2% du capital par trade.
 Univers : toutes les actions US tradables sur Alpaca.
-Si tu as perdu récemment sur ce ticker, sois plus prudent.
 Réponds UNIQUEMENT en JSON :
-{"action":"BUY"|"SHORT"|"HOLD","confidence":0-100,"reason":"français court","risk_pct":1-2,"tp_pct":3-15}"""
+{"action":"BUY"|"SHORT"|"HOLD","confidence":0-100,"reason":"français court","risk_pct":5-25,"tp_pct":3-15}"""
 
 PROMPT_CRYPTO = """Tu es un day trader crypto professionnel — analyse 24/7.
-Long + Short selon le setup. Minimum 75 de confiance pour agir.
-Taille max : 5% du capital de trading par position.
+Minimum 75 de confiance pour agir.
 Réponds UNIQUEMENT en JSON :
-{"action":"BUY"|"SHORT"|"HOLD","confidence":0-100,"reason":"français court","risk_pct":1-5,"tp_pct":5-30}"""
+{"action":"BUY"|"SHORT"|"HOLD","confidence":0-100,"reason":"français court","risk_pct":10-30,"tp_pct":5-30}"""
 
 def ask_claude(prompt, user_msg):
     try:
@@ -440,7 +432,6 @@ def place_order_bracket(symbol, side, qty, tp_pct, label="", reason=""):
         record_error(f"Order {symbol}: {e}")
         send_telegram(f"❌ <b>Ordre échoué</b> {symbol}\n{str(e)[:100]}")
 
-# Fonction générique pour vendre au marché (Hold / Urgence)
 def place_order(symbol, side, qty, label=""):
     try:
         order_side = OrderSide.BUY if side == "buy" else OrderSide.SELL
@@ -503,16 +494,15 @@ def manage_hold_portfolio():
     hold_pos  = {s: d for s, d in positions.items() if s in hold_port}
     if len(hold_pos) >= MAX_HOLD_POSITIONS: return
 
-    hold_capital  = account["equity"] * HOLD_PCT
-    hold_invested = sum(d["value"] for d in hold_pos.values())
-    available     = hold_capital - hold_invested
-    if available < account["equity"] * 0.01: return
+    # Utilise le cash disponible sur Alpaca
+    available = account["cash"]
+    if available < 10: return # Minimum pour faire un ordre
 
     spy_perf   = get_spy_perf()
     news_macro = format_news(get_news("stocks market economy", count=3))
 
     signal = ask_claude(PROMPT_HOLD,
-        f"Capital hold disponible: ${available:.2f}\n"
+        f"Cash disponible: ${available:.2f}\n"
         f"SPY aujourd'hui: {spy_perf:+.2f}%\n"
         f"News macro:\n{news_macro}\n"
         f"Positions hold actuelles: {list(hold_port.keys()) or 'aucune'}\n"
@@ -524,7 +514,7 @@ def manage_hold_portfolio():
     conf    = signal.get("confidence", 0)
     reason  = signal.get("reason", "")
     horizon = signal.get("horizon", "moyen")
-    alloc   = signal.get("allocation_pct", 3) / 100
+    alloc   = signal.get("allocation_pct", 10) / 100
     if conf < MIN_CONFIDENCE: return
 
     if signal["action"] == "BUY":
@@ -536,14 +526,8 @@ def manage_hold_portfolio():
         send_telegram(f"🔒 <b>HOLD {horizon.upper()}</b>\n<b>{symbol}</b> ${price:.2f}\n{reason}\nConfiance : {conf}%")
         place_order(symbol, "buy", amount/price, label="Hold")
 
-    elif signal["action"] == "SELL" and symbol in hold_pos:
-        memory["hold_portfolio"].pop(symbol, None)
-        save_memory(memory)
-        send_telegram(f"🔒 <b>Sortie Hold</b>\n<b>{symbol}</b>\n{reason}")
-        place_order(symbol, "sell", hold_pos[symbol]["qty"], label="Hold")
-
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# DAY TRADING — ALPACA (AVEC FILTRE RSI)
+# DAY TRADING — ALPACA
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def scan_stocks():
     if trading_paused or vacation_mode or not is_market_open(): return
@@ -553,14 +537,15 @@ def scan_stocks():
     trade_pos = {s: d for s, d in positions.items() if s not in hold_syms}
     if len(trade_pos) >= MAX_DAYTRADE_POSITIONS: return
 
-    trade_capital = account["equity"] * DAYTRADE_PCT
+    # Utilise le cash disponible pour trader
+    trade_capital = account["cash"]
+    if trade_capital < 5: return
 
     for ticker in DAYTRADE_UNIVERSE:
         if ticker in positions: continue
         price = get_price(ticker)
         ta    = get_ta(ticker)
         
-        # FILTRE: N'appelle Claude que si RSI survendu ou suracheté (économie d'API)
         if not price or not ta or (40 < ta['rsi'] < 60): continue
 
         articles = get_news(ticker, count=2)
@@ -576,31 +561,31 @@ def scan_stocks():
         conf   = signal.get("confidence",0)
         reason = signal.get("reason","")
         tp_pct = signal.get("tp_pct", STOCK_TP_PCT)
-        risk   = signal.get("risk_pct", 1)
+        risk   = signal.get("risk_pct", 5)
         
         if conf < MIN_CONFIDENCE: continue
         qty = (trade_capital * risk / 100) / price
 
         if action == "BUY" and account["cash"] >= qty * price:
             place_order_bracket(ticker, "buy", qty, tp_pct=tp_pct, label="Day Trade", reason=reason)
-            break # Un seul par scan
+            break
         elif action == "SHORT":
             place_order_bracket(ticker, "sell", qty, tp_pct=tp_pct, label="Short Trade", reason=reason)
             break
         time.sleep(0.5)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# DAY TRADING — CRYPTO 24/7 (AVEC FILTRE RSI)
+# DAY TRADING — CRYPTO 24/7
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def scan_crypto():
     if trading_paused or vacation_mode or not coinbase: return
     if len(active_crypto_trades) >= MAX_CRYPTO_POSITIONS: return
 
-    btc_val   = get_crypto_balance("BTC") * (get_crypto_price("BTC-USD") or 0)
-    eth_val   = get_crypto_balance("ETH") * (get_crypto_price("ETH-USD") or 0)
-    hold_val  = btc_val + eth_val
-    total_cb  = hold_val / max(CRYPTO_HOLD_PCT * 0.65, 0.01)
-    trade_cap = total_cb * CRYPTO_TRADE_PCT
+    # Regarde le vrai cash disponible sur Coinbase (USD / USDC)
+    cash_usd = get_crypto_balance("USD") + get_crypto_balance("USDC")
+    trade_cap = cash_usd
+
+    if trade_cap < 5: return # Il faut un peu de liquidité pour trader
 
     for symbol in CRYPTO_UNIVERSE:
         if symbol in active_crypto_trades: continue
@@ -622,11 +607,12 @@ def scan_crypto():
         conf   = signal.get("confidence",0)
         reason = signal.get("reason","")
         tp_pct = signal.get("tp_pct", CRYPTO_TP_PCT)
-        risk   = signal.get("risk_pct", 2)
+        risk   = signal.get("risk_pct", 10)
         
         if conf < MIN_CONFIDENCE: continue
         amount = trade_cap * risk / 100
-        if amount < 5: continue
+        
+        if amount < 2: continue # Sécurité, on ne passe pas d'ordre de moins de 2$
 
         if action == "BUY":
             place_crypto_order(symbol, "buy", amount, tp_pct=tp_pct, label="Day Trade", reason=reason)
@@ -636,9 +622,6 @@ def scan_crypto():
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # GESTION DU RISQUE (CRYPTO ET ALERTES UNIQUEMENT)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# Note: Le risque action est maintenant géré par Alpaca (Bracket Orders). 
-# On garde check_crypto_risk() pour la crypto car l'API de base Coinbase est moins souple.
-
 def check_crypto_risk():
     if not coinbase: return
     for symbol, trade in list(active_crypto_trades.items()):
@@ -687,7 +670,6 @@ def run_dca():
         if amount >= 1:
             place_crypto_order(symbol, "buy", amount, label="DCA")
     
-    # Reste pour actions hold
     account = get_account_info()
     signal  = ask_claude(PROMPT_HOLD,
         f"DCA mensuel de ${dca_usd*0.30:.2f} disponible.\nQuel actif hold actions renforcer ce mois-ci ?\nPositions actuelles: {list(load_memory().get('hold_portfolio',{}).keys())}"
@@ -719,16 +701,17 @@ def send_daily_report(immediate=False):
     r  = f"{titre}\n{'='*22}\n\n"
     r += f"💰 Actions : <b>${account['equity']:.2f}</b>\n"
     r += f"₿ Crypto hold : ~${btc_val+eth_val:.2f}\n"
-    r += f"💵 Cash : ${account['cash']:.2f}\n"
+    r += f"💵 Cash Dispo Alpaca: ${account['cash']:.2f}\n"
+    r += f"💵 Cash Dispo Crypto: ${get_crypto_balance('USD')+get_crypto_balance('USDC'):.2f}\n"
     r += f"{'📈' if account['pnl']>=0 else '📉'} Aujourd'hui : ${account['pnl']:+.2f} | SPY : {spy:+.2f}%\n\n"
-    r += f"🔒 <b>Hold ({int(HOLD_PCT*100)}%) — {len(hold_pos)} positions</b>\n"
+    r += f"🔒 <b>Hold — {len(hold_pos)} positions</b>\n"
     
     for s, d in hold_pos.items():
         hp = load_memory()["hold_portfolio"].get(s,{})
         r += f"  {'🟢' if d['pnl_pct']>=0 else '🔴'} <b>{s}</b> ${d['value']:.2f} ({d['pnl_pct']:+.2f}%) [{hp.get('horizon','?')}]\n"
     if not hold_pos: r += "  (aucune — Claude cherche)\n"
     
-    r += f"\n⚡ <b>Day Trade ({int(DAYTRADE_PCT*100)}%) — {len(trade_pos)} actives</b>\n"
+    r += f"\n⚡ <b>Day Trade — {len(trade_pos)} actives</b>\n"
     for s, d in trade_pos.items():
         t = active_stock_trades.get(s,{})
         emoji = "📈" if t.get("side","long") == "long" else "📉"
@@ -876,7 +859,8 @@ def cmd_status():
         f"💼 <b>Portefeuille</b>\n\n"
         f"💰 Actions : <b>${account['equity']:.2f}</b>\n"
         f"₿ Crypto hold : ~${btc_val+eth_val:.2f}\n"
-        f"💵 Cash : ${account['cash']:.2f}\n"
+        f"💵 Cash Alpaca : ${account['cash']:.2f}\n"
+        f"💵 Cash Crypto : ${get_crypto_balance('USD')+get_crypto_balance('USDC'):.2f}\n"
         f"{'📈' if account['pnl']>=0 else '📉'} Aujourd'hui : ${account['pnl']:+.2f}\n\n"
         f"🔒 Hold : {len(hold_pos)} pos | ⚡ Trade : {len(trade_pos)} pos\n\n"
         f"📅 Mois : ${ms['pnl']:+.2f} | 🗓️ Année : ${ys['pnl']:+.2f}\n\n"
@@ -1034,7 +1018,7 @@ def cmd_voir_alertes():
     send_telegram(msg)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# HANDLERS & THREADS (AVEC NEWS WATCHER)
+# HANDLERS & THREADS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def handle_telegram():
     last_update_id = None
@@ -1076,7 +1060,6 @@ def handle_telegram():
         time.sleep(2)
 
 def thread_news_watcher():
-    """Surveille les news globales pour détecter des chocs de marché (Toutes les 20 min)"""
     last_news_title = ""
     while True:
         try:
@@ -1151,17 +1134,15 @@ def start_health_server():
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def main():
     send_telegram(
-        "🤖 <b>Trading Agent V2 Démarré !</b>\n\n"
+        "🤖 <b>Trading Agent V2 (CASH DEPLOYER)</b>\n\n"
         "━━━━━━━━━━━━━━━━━━━━━\n"
         "📈 <b>ALPACA (LIVE ACTIF)</b>\n"
         "🔒 Hold 60% — Claude choisit dynamiquement\n"
         "⚡ Trade 40% — Ordres Bracket (SL/TP gérés par Alpaca)\n\n"
         "₿ <b>COINBASE</b>\n"
-        "🔒 Hold strict — BTC 25% | ETH 15%\n"
-        "⚖️ Hold souple — SOL 5% | XRP 3% | LINK 2%\n"
-        "⚡ Trade 50% — Avec sécurité RSI\n"
+        "⚡ Trade avec le cash (USD/USDC) disponible.\n"
         "━━━━━━━━━━━━━━━━━━━━━\n"
-        "⚠️ <i>Filtre anti-requêtes excessives activé.</i>\n"
+        "⚠️ <i>Le bot utilise directement ton argent liquide.</i>\n"
         "Tape /aide 👇"
     )
 
@@ -1177,7 +1158,7 @@ def main():
     threading.Thread(target=thread_scheduler,    daemon=True).start()
     threading.Thread(target=thread_news_watcher, daemon=True).start()
 
-    log("✅ Tous les threads démarrés.")
+    log("✅ Tous les threads démarrés en mode LIVE.")
 
     while True:
         time.sleep(60)
