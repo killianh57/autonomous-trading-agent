@@ -3,3 +3,4 @@ python-dotenv==1.0.0
 coinbase-advanced-py==1.4.0
 anthropic
 alpaca-py
+pytz
