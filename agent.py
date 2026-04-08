@@ -29,9 +29,11 @@ CRYPTO_HOLD_ALLOC  = {
     "BTC-EUR": 0.25, "ETH-EUR": 0.15,
     "SOL-EUR": 0.05, "XRP-EUR": 0.03, "LINK-EUR": 0.02,
 }
-MAX_CRYPTO_POSITIONS          = 3
-CRYPTO_SL_PCT                 = 7.0
-CRYPTO_TP_PCT                 = 12.0
+MAX_CRYPTO_POSITIONS          = 6
+CRYPTO_SL_PCT                 = 4.0
+CRYPTO_TP_PCT                 = 6.0
+TRAILING_STOP_PCT             = 2.5
+CRYPTO_RISK_PER_TRADE         = 0.12
 CRYPTO_MIN_CONFIDENCE         = 65
 COINBASE_FEE_PCT              = 1.2
 CRYPTO_CANDLE_WINDOW_HOURS    = 48
@@ -52,7 +54,7 @@ ANNUAL_GOAL_PCT  = 20.0
 DCA_MONTHLY_EUR  = 100
 MEMORY_FILE      = "trade_memory.json"
 
-INTERVAL_CRYPTO    = 180
+INTERVAL_CRYPTO    = 60
 INTERVAL_STOCKS    = 300
 INTERVAL_RISK      = 30
 INTERVAL_SCHEDULER = 60
@@ -263,7 +265,7 @@ def get_crypto_ta(symbol):
             product_id=symbol,
             start=str(start_ts),
             end=str(end_ts),
-            granularity="ONE_HOUR"
+            granularity="FIFTEEN_MINUTE"
         )
         prices = [float(c["close"]) for c in candles.get("candles",[])]
         prices = prices[::-1]  # remettre en ordre chronologique (Coinbase renvoie décroissant)
@@ -274,9 +276,19 @@ def get_crypto_ta(symbol):
         return {"rsi": rsi, "ma20": ma20, "current": cur,
                 "trend": "haussier" if (ma20 and cur > ma20) else "baissier",
                 "above_ma20": cur > ma20 if ma20 else None,
-                "week_perf": ((cur-prices[-7])/prices[-7]*100) if len(prices) >= 7 else None}
+                "week_perf": ((cur-prices[-7])/prices[-7]*100) if len(prices) >= 7 else None,
+                "prices": prices}
     except:
         return None
+
+def detect_breakout_setup(prices, threshold=0.02):
+    """Détecte si le prix approche ou franchit un niveau de résistance récent.
+    EARLY: prix dans les `threshold*100`% sous le plus haut des 20 dernières bougies."""
+    if not prices or len(prices) < 20:
+        return False
+    recent_high = max(prices[-20:])
+    current     = prices[-1]
+    return (recent_high - current) / recent_high <= threshold
 
 def format_ta(ta):
     if not ta: return "Donnees indisponibles"
@@ -330,6 +342,7 @@ def place_crypto_order(symbol, side, amount_eur, tp_pct=None, label="", reason="
             if side == "buy":
                 active_crypto_trades[symbol] = {
                     "side": "long", "amount": amount_eur, "entry": price,
+                    "peak": price,
                     "tp_pct": tp_pct or CRYPTO_TP_PCT, "reason": reason,
                     "entry_time": datetime.utcnow().isoformat()
                 }
@@ -361,19 +374,23 @@ def scan_crypto():
     trade_cap = cash_eur
     if trade_cap < 5: return
     for symbol in CRYPTO_UNIVERSE:
+        if len(active_crypto_trades) >= MAX_CRYPTO_POSITIONS: break
         if symbol in active_crypto_trades: continue
         price = get_crypto_price(symbol)
         ta    = get_crypto_ta(symbol)
         if not price or not ta or not ta.get("rsi"): continue
-        rsi       = ta["rsi"]
-        trend     = ta["trend"]
+        if ta.get("week_perf") is None or abs(ta["week_perf"]) < 0.3: continue
+        rsi        = ta["rsi"]
+        trend      = ta["trend"]
         above_ma20 = ta.get("above_ma20")
-        if rsi < 35 and trend == "haussier" and above_ma20:
-            amount = trade_cap * CRYPTO_TRADE_ALLOC_PCT
+        prices     = ta.get("prices", [])
+        has_setup  = detect_breakout_setup(prices)
+        if (rsi < 35 and trend == "haussier" and above_ma20) or \
+           (40 <= rsi <= 60 and has_setup):
+            amount = trade_cap * CRYPTO_RISK_PER_TRADE
             if amount < 2: continue
-            reason = f"RSI={rsi:.0f} survendu, tendance haussiere"
+            reason = f"RSI={rsi:.0f} {'breakout' if has_setup else ''} tendance={trend}"
             place_crypto_order(symbol, "buy", amount, tp_pct=CRYPTO_TP_PCT, label="Day Trade", reason=reason)
-            break
         time.sleep(0.3)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -392,9 +409,19 @@ def check_crypto_risk():
         currency      = symbol.replace("-EUR","")
         balance       = get_crypto_balance(currency)
         if balance <= 0: continue
+        # Met à jour le pic de prix pour le trailing stop
+        with _lock:
+            current_peak = trade.get("peak", entry)
+            if price > current_peak:
+                active_crypto_trades[symbol]["peak"] = price
+                current_peak = price
+        trailing_drop = ((current_peak - price) / current_peak * 100) if current_peak else 0
         if net_pnl_pct <= -CRYPTO_SL_PCT:
             send_telegram(f"<b>Stop Loss crypto</b> {symbol} (Net: -{abs(net_pnl_pct):.1f}%)")
             place_crypto_order(symbol, "sell", balance*price, label="SL")
+        elif trailing_drop >= TRAILING_STOP_PCT and net_pnl_pct > 0:
+            send_telegram(f"<b>Trailing Stop crypto</b> {symbol} (recul: -{trailing_drop:.1f}% depuis pic)")
+            place_crypto_order(symbol, "sell", balance*price, label="TS")
         elif net_pnl_pct >= tp_pct:
             send_telegram(f"<b>Take Profit crypto</b> {symbol} (Net: +{net_pnl_pct:.1f}%)")
             place_crypto_order(symbol, "sell", balance*price, label="TP")
