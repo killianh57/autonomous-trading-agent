@@ -34,15 +34,14 @@ CRYPTO_SL_PCT                 = 7.0
 CRYPTO_TP_PCT                 = 12.0
 CRYPTO_MIN_CONFIDENCE         = 65
 COINBASE_FEE_PCT              = 1.2
-CRYPTO_CANDLE_WINDOW_HOURS    = 300
+CRYPTO_CANDLE_WINDOW_HOURS    = 48
 CRYPTO_CIRCUIT_BREAKER_LOSSES = 3
 CRYPTO_TRADE_ALLOC_PCT        = 0.20
 
-CRYPTO_UNIVERSE = [
-    "BTC-EUR","ETH-EUR","SOL-EUR","XRP-EUR","LINK-EUR",
-    "AVAX-EUR","POL-EUR","ADA-EUR","DOT-EUR","DOGE-EUR",
-    "LTC-EUR","UNI-EUR","ATOM-EUR","NEAR-EUR","APT-EUR",
-    "ARB-EUR","OP-EUR","INJ-EUR","ROSE-EUR","FET-EUR",
+CRYPTO_UNIVERSE_RAW = [
+    "BTC-EUR", "ETH-EUR", "SOL-EUR", "XRP-EUR",
+    "ADA-EUR", "DOGE-EUR", "LTC-EUR", "DOT-EUR",
+    "LINK-EUR", "AVAX-EUR", "UNI-EUR", "ATOM-EUR",
 ]
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -88,6 +87,30 @@ def progress_bar(current, goal, length=10):
 
 def log(msg):
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}")
+
+def get_valid_products(retries=3, delay=5):
+    """Récupère la liste des produits valides avec retry"""
+    if not coinbase:
+        return set()
+    for attempt in range(retries):
+        try:
+            response = coinbase.get_products()
+            products = response.get("products", [])
+            result = {p["product_id"] for p in products if "product_id" in p}
+            if result:
+                return result
+            log(f"⚠️ Liste produits vide, tentative {attempt+1}/{retries}")
+        except Exception as e:
+            log(f"Erreur récupération produits (tentative {attempt+1}): {e}")
+        if attempt < retries - 1:
+            time.sleep(delay)
+    return set()
+
+VALID_PRODUCTS = get_valid_products()
+if not VALID_PRODUCTS:
+    log("❌ Impossible de récupérer les produits Coinbase. Vérifiez vos clés API.")
+CRYPTO_UNIVERSE = [s for s in CRYPTO_UNIVERSE_RAW if s in VALID_PRODUCTS]
+log(f"🚀 {len(CRYPTO_UNIVERSE)} crypto actives: {CRYPTO_UNIVERSE}")
 
 def send_telegram(msg):
     try:
