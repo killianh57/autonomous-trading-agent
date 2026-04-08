@@ -72,14 +72,14 @@ CRYPTO_HOLD_ALLOC  = {
     "LINK-EUR": 0.02,
 }
 
-COINBASE_FEE_PCT              = 1.2   # frais aller-retour
-CRYPTO_SL_PCT                 = 2.5   # stop loss net
-CRYPTO_TP_PCT                 = 4.0   # take profit net rentable apres frais
-TRAILING_STOP_PCT             = 3.0   # trailing stop elargi (evite les micro-ventes)
-CRYPTO_RISK_PER_TRADE         = 0.15  # 15% du cash dispo par trade
+COINBASE_FEE_PCT              = 1.2
+CRYPTO_SL_PCT                 = 2.5
+CRYPTO_TP_PCT                 = 4.0
+TRAILING_STOP_PCT             = 3.0
+CRYPTO_RISK_PER_TRADE         = 0.15
 MAX_CRYPTO_POSITIONS          = 8
 CRYPTO_MIN_CONFIDENCE         = 65
-CRYPTO_CANDLE_WINDOW_HOURS    = 24    # fenetre bougies 5min
+CRYPTO_CANDLE_WINDOW_HOURS    = 24
 
 CRYPTO_UNIVERSE_RAW = [
     "BTC-EUR", "ETH-EUR", "SOL-EUR", "XRP-EUR",
@@ -105,7 +105,7 @@ INTERVAL_SCHEDULER = 60
 # CLIENTS
 # ==================================================
 try:
-    trading_client = TradingClient(ALPACA_API_KEY, ALPACA_SECRET_KEY, paper=True)
+    trading_client = TradingClient(ALPACA_API_KEY, ALPACA_SECRET_KEY, paper=False)
     print("Alpaca TradingClient OK")
 except Exception as e:
     print("Alpaca TradingClient error: " + str(e))
@@ -168,13 +168,6 @@ print(str(len(CRYPTO_UNIVERSE)) + " crypto actives: " + str(CRYPTO_UNIVERSE))
 # ==================================================
 # UTILITAIRES
 # ==================================================
-def progress_bar(current, goal, length=10):
-    if goal == 0:
-        return "." * length
-    pct    = min(current / goal, 1.0)
-    filled = int(pct * length)
-    return ("#" * filled) + ("." * (length - filled)) + " " + str(int(pct * 100)) + "%"
-
 def log(msg):
     print("[" + datetime.now().strftime("%Y-%m-%d %H:%M:%S") + "] " + str(msg))
 
@@ -187,6 +180,62 @@ def send_telegram(msg):
         )
     except Exception as e:
         log("Telegram error: " + str(e))
+
+# ==================================================
+# HELPERS AFFICHAGE TELEGRAM (100% ASCII dans le code)
+# ==================================================
+def _s(val, prefix="$", dec=2):
+    """Formate un nombre avec signe."""
+    sign = "+" if val >= 0 else ""
+    return sign + prefix + str(round(val, dec))
+
+def _bar(current, goal, length=8):
+    """Barre de progression ASCII."""
+    if goal == 0:
+        return "[" + "." * length + "] 0%"
+    pct    = min(current / goal, 1.0)
+    filled = int(pct * length)
+    return "[" + "#" * filled + "." * (length - filled) + "] " + str(int(pct * 100)) + "%"
+
+def _sep():
+    """Separateur de section."""
+    return "\n" + "-" * 18 + "\n"
+
+# Emojis via Unicode escapes (fichier reste 100% ASCII)
+ICO_PORT   = "\U0001f4bc"  # portfolio
+ICO_CHART  = "\U0001f4ca"  # stats
+ICO_HOLD   = "\U0001f512"  # hold
+ICO_TRADE  = "\u26a1"      # trade
+ICO_CRYPTO = "\U0001f48e"  # crypto
+ICO_TARGET = "\U0001f3af"  # target
+ICO_CAL    = "\U0001f4c5"  # calendar
+ICO_MOIS   = "\U0001f4c6"  # month
+ICO_YEAR   = "\U0001f5d3"  # year
+ICO_UP     = "\U0001f4c8"  # up
+ICO_DOWN   = "\U0001f4c9"  # down
+ICO_WORLD  = "\U0001f30d"  # world
+ICO_BOT    = "\U0001f916"  # robot
+ICO_BELL   = "\U0001f514"  # bell
+ICO_HIST   = "\U0001f4dc"  # scroll
+ICO_BEST   = "\U0001f3c6"  # trophy
+ICO_WORST  = "\U0001f494"  # broken heart
+ICO_PAUSE  = "\u23f8"      # pause
+ICO_PLAY   = "\u25b6"      # play
+ICO_SOS    = "\U0001f6a8"  # sos
+ICO_BEACH  = "\U0001f3d6"  # beach
+ICO_MORN   = "\U0001f305"  # sunrise
+ICO_BRAIN  = "\U0001f9e0"  # brain
+ICO_WAVE   = "\U0001f44b"  # wave
+ICO_CHECK  = "\u2705"      # check
+ICO_WARN   = "\u26a0"      # warning
+ICO_RED    = "\U0001f534"  # red circle
+ICO_GREEN  = "\U0001f7e2"  # green circle
+ICO_YELLOW = "\U0001f7e1"  # yellow circle
+ICO_BTC    = "\u20bf"      # bitcoin sign
+ICO_MONEY  = "\U0001f4b5"  # dollar
+ICO_NOTE   = "\U0001f9fe"  # receipt
+ICO_ROCKET = "\U0001f680"  # rocket
+ICO_MUSCLE = "\U0001f4aa"  # muscle
 
 # ==================================================
 # MEMOIRE
@@ -275,8 +324,8 @@ def update_equity_checkpoints(equity):
     for key, fmt in [("week", "%Y-%W"), ("month", "%Y-%m"), ("year", "%Y")]:
         k = now.strftime(fmt)
         if es.get(key + "_key") != k:
-            es[key]           = equity
-            es[key + "_key"]  = k
+            es[key]          = equity
+            es[key + "_key"] = k
     memory["equity_start"] = es
     save_memory(memory)
 
@@ -410,7 +459,7 @@ def get_crypto_balance(currency):
         return 0
 
 # ==================================================
-# ANALYSE TECHNIQUE - ACTIONS (daily bars)
+# ANALYSE TECHNIQUE - ACTIONS
 # ==================================================
 def get_historical_prices(ticker, days=60):
     try:
@@ -443,17 +492,17 @@ def get_ta(ticker):
     ma50 = sum(prices[-50:]) / 50 if len(prices) >= 50 else None
     cur  = prices[-1]
     return {
-        "rsi":       rsi,
-        "ma20":      ma20,
-        "ma50":      ma50,
-        "current":   cur,
-        "trend":     "haussier" if (ma50 and ma20 > ma50) else "baissier",
+        "rsi":        rsi,
+        "ma20":       ma20,
+        "ma50":       ma50,
+        "current":    cur,
+        "trend":      "haussier" if (ma50 and ma20 > ma50) else "baissier",
         "above_ma20": cur > ma20,
-        "week_perf": ((cur - prices[-6]) / prices[-6] * 100) if len(prices) >= 6 else None
+        "week_perf":  ((cur - prices[-6]) / prices[-6] * 100) if len(prices) >= 6 else None
     }
 
 # ==================================================
-# ANALYSE TECHNIQUE - CRYPTO (bougies 5min Coinbase)
+# ANALYSE TECHNIQUE - CRYPTO (bougies 5min)
 # ==================================================
 def get_crypto_ta(symbol):
     try:
@@ -468,25 +517,23 @@ def get_crypto_ta(symbol):
             granularity="FIVE_MINUTE"
         )
         prices = [float(c["close"]) for c in candles.get("candles", [])]
-        prices = prices[::-1]  # ordre chronologique
-        if len(prices) < 55:  # On a besoin de plus de bougies pour la MA50
+        prices = prices[::-1]
+        if len(prices) < 55:
             return None
-            
-        rsi  = calculate_rsi(prices, period=14) # RSI lissé sur 14 périodes
+        rsi  = calculate_rsi(prices, period=14)
         ma20 = sum(prices[-20:]) / 20
         ma50 = sum(prices[-50:]) / 50
         cur  = prices[-1]
-        
         return {
-            "rsi":       rsi,
-            "ma20":      ma20,
-            "ma50":      ma50,
-            "current":   cur,
-            "trend":     "haussier" if (cur > ma20) else "baissier",
-            "strong_trend": (ma20 > ma50), # Tendance lourde validée !
-            "above_ma20": cur > ma20,
-            "week_perf": ((cur - prices[-7]) / prices[-7] * 100) if len(prices) >= 7 else None,
-            "prices":    prices
+            "rsi":          rsi,
+            "ma20":         ma20,
+            "ma50":         ma50,
+            "current":      cur,
+            "trend":        "haussier" if (cur > ma20) else "baissier",
+            "strong_trend": (ma20 > ma50),
+            "above_ma20":   cur > ma20,
+            "week_perf":    ((cur - prices[-7]) / prices[-7] * 100) if len(prices) >= 7 else None,
+            "prices":       prices
         }
     except Exception:
         return None
@@ -509,7 +556,7 @@ def format_ta(ta):
         else:
             label = "Neutre"
         rsi_txt = "RSI " + str(ta["rsi"]) + " " + label + "\n"
-    wp = ("Perf : " + str(round(ta["week_perf"], 1)) + "%\n") if ta.get("week_perf") else ""
+    wp = ("Perf 7j : " + str(round(ta["week_perf"], 1)) + "%\n") if ta.get("week_perf") else ""
     ma_status = "OK" if ta.get("above_ma20") else "Attention"
     return rsi_txt + "Tendance : " + ta["trend"] + "\nMA20 : " + ma_status + "\n" + wp
 
@@ -601,18 +648,18 @@ def place_order(symbol, side, qty, tp_pct=None, label=""):
                 "tp_pct": tp
             }
             send_telegram(
-                "<b>LONG " + label + "</b> <b>" + symbol + "</b>\n"
-                "~$" + str(valeur) + "\n"
-                "SL: -" + str(STOCK_SL_PCT) + "% | TP: +" + str(tp) + "%"
+                ICO_CHECK + " <b>LONG " + label + "</b>  <b>" + symbol + "</b>\n"
+                "~$" + str(valeur) + "   "
+                "SL -" + str(STOCK_SL_PCT) + "%  TP +" + str(tp) + "%"
             )
         else:
             active_stock_trades.pop(symbol, None)
             send_telegram(
-                "<b>Cloture " + label + "</b> <b>" + symbol + "</b> ~$" + str(valeur)
+                ICO_MONEY + " <b>Cloture " + label + "</b>  <b>" + symbol + "</b>  ~$" + str(valeur)
             )
     except Exception as e:
         record_error("Order " + symbol + ": " + str(e))
-        send_telegram("<b>Ordre echoue</b> " + symbol + "\n" + str(e)[:100])
+        send_telegram(ICO_WARN + " Ordre echoue " + symbol + "\n" + str(e)[:80])
 
 def open_short(symbol, qty, tp_pct=None):
     try:
@@ -633,13 +680,13 @@ def open_short(symbol, qty, tp_pct=None):
             "tp_pct": tp
         }
         send_telegram(
-            "<b>SHORT Day Trade</b> <b>" + symbol + "</b>\n"
-            "~$" + str(valeur) + "\n"
-            "SL: +" + str(STOCK_SL_PCT) + "% | TP: -" + str(tp) + "%"
+            ICO_DOWN + " <b>SHORT</b>  <b>" + symbol + "</b>\n"
+            "~$" + str(valeur) + "   "
+            "SL +" + str(STOCK_SL_PCT) + "%  TP -" + str(tp) + "%"
         )
     except Exception as e:
         record_error("Short " + symbol + ": " + str(e))
-        send_telegram("<b>Short echoue</b> " + symbol + "\n" + str(e)[:100])
+        send_telegram(ICO_WARN + " Short echoue " + symbol + "\n" + str(e)[:80])
 
 # ==================================================
 # ORDRES - COINBASE (EUR)
@@ -678,19 +725,19 @@ def place_crypto_order(symbol, side, amount_eur, tp_pct=None, label="", reason="
                     "entry_time": datetime.utcnow().isoformat()
                 }
                 send_telegram(
-                    "<b>LONG " + label + "</b> <b>" + symbol + "</b>\n"
-                    "~" + str(round(amount_eur, 2)) + "EUR\n"
-                    "SL: -" + str(CRYPTO_SL_PCT) + "% | TP: +" + str(tp) + "% (nets frais)"
+                    ICO_CHECK + " <b>LONG " + label + "</b>  " + ICO_CRYPTO + " <b>" + symbol + "</b>\n"
+                    "~" + str(round(amount_eur, 2)) + " EUR   "
+                    "SL -" + str(CRYPTO_SL_PCT) + "%  TP +" + str(tp) + "%"
                 )
             else:
                 active_crypto_trades.pop(symbol, None)
                 send_telegram(
-                    "<b>Vente " + label + "</b> <b>" + symbol + "</b> ~"
-                    + str(round(amount_eur, 2)) + "EUR (frais deduits)"
+                    ICO_MONEY + " <b>Vente " + label + "</b>  " + ICO_CRYPTO + " <b>" + symbol + "</b>  ~"
+                    + str(round(amount_eur, 2)) + " EUR"
                 )
     except Exception as e:
         record_error("Crypto " + symbol + ": " + str(e))
-        send_telegram("<b>Ordre crypto echoue</b> " + symbol + "\n" + str(e)[:100])
+        send_telegram(ICO_WARN + " Ordre crypto echoue " + symbol + "\n" + str(e)[:80])
 
 # ==================================================
 # DETECTION POSITIONS EXISTANTES
@@ -723,15 +770,15 @@ def check_existing_holdings():
                 "reason":     "Position existante detectee",
                 "entry_time": datetime.utcnow().isoformat()
             }
-        log("Position detectee : " + symbol + " " + str(round(balance, 6)) + " = " + str(round(valeur, 2)) + "EUR")
+        log("Position detectee : " + symbol + " = " + str(round(valeur, 2)) + "EUR")
         send_telegram(
-            "<b>Position detectee</b> <b>" + symbol + "</b>\n"
-            + str(round(balance, 6)) + " = ~" + str(round(valeur, 2)) + "EUR\n"
+            ICO_BELL + " <b>Position detectee</b>  <b>" + symbol + "</b>\n"
+            + str(round(balance, 6)) + " = ~" + str(round(valeur, 2)) + " EUR\n"
             "Ajoutee au suivi TP/SL"
         )
 
 # ==================================================
-# POCHE HOLD - ALPACA (Claude decide dynamiquement)
+# POCHE HOLD - ALPACA
 # ==================================================
 def manage_hold_portfolio():
     if trading_paused or vacation_mode or not is_market_open():
@@ -779,20 +826,20 @@ def manage_hold_portfolio():
         }
         save_memory(memory)
         send_telegram(
-            "<b>HOLD " + horizon.upper() + "</b>\n"
-            "<b>" + symbol + "</b> $" + str(round(price, 2)) + "\n"
-            + reason + "\nConfiance : " + str(conf) + "%"
+            ICO_HOLD + " <b>HOLD " + horizon.upper() + "</b>  <b>" + symbol + "</b>\n"
+            "$" + str(round(price, 2)) + "   Conf " + str(conf) + "%\n"
+            + reason
         )
         place_order(symbol, "buy", amount / price, label="Hold")
 
     elif signal["action"] == "SELL" and symbol in hold_pos:
         memory["hold_portfolio"].pop(symbol, None)
         save_memory(memory)
-        send_telegram("<b>Sortie Hold</b> <b>" + symbol + "</b>\n" + reason)
+        send_telegram(ICO_HOLD + " <b>Sortie Hold</b>  <b>" + symbol + "</b>\n" + reason)
         place_order(symbol, "sell", hold_pos[symbol]["qty"], label="Hold")
 
 # ==================================================
-# DAY TRADING - ALPACA (Claude + TA)
+# DAY TRADING - ALPACA
 # ==================================================
 def scan_stocks():
     if trading_paused or vacation_mode or not is_market_open():
@@ -834,25 +881,24 @@ def scan_stocks():
 
         if action == "BUY" and account["cash"] >= qty * price:
             send_telegram(
-                "<b>Signal LONG</b>\n<b>" + ticker + "</b> $" + str(round(price, 2)) + "\n"
-                + reason + "\nConfiance : " + str(conf) + "% | TP: +" + str(tp_pct) + "%"
+                ICO_UP + " <b>Signal LONG</b>  <b>" + ticker + "</b>  $" + str(round(price, 2)) + "\n"
+                + reason + "\nConf " + str(conf) + "%  TP +" + str(tp_pct) + "%"
             )
             place_order(ticker, "buy", qty, tp_pct=tp_pct, label="Day Trade")
             break
         elif action == "SHORT":
             send_telegram(
-                "<b>Signal SHORT</b>\n<b>" + ticker + "</b> $" + str(round(price, 2)) + "\n"
-                + reason + "\nConfiance : " + str(conf) + "% | TP: -" + str(tp_pct) + "%"
+                ICO_DOWN + " <b>Signal SHORT</b>  <b>" + ticker + "</b>  $" + str(round(price, 2)) + "\n"
+                + reason + "\nConf " + str(conf) + "%  TP -" + str(tp_pct) + "%"
             )
             open_short(ticker, qty, tp_pct=tp_pct)
             break
         time.sleep(0.5)
 
 # ==================================================
-# GESTION DU DRAWDOWN DYNAMIQUE (DISJONCTEUR)
+# DISJONCTEUR DYNAMIQUE
 # ==================================================
 def get_crypto_capital():
-    # Calcule tout l'argent sur Coinbase (Cash + Cryptos)
     total = get_crypto_balance("EUR")
     for symbol in set(CRYPTO_UNIVERSE + CRYPTO_HOLD_ALL):
         currency = symbol.replace("-EUR", "")
@@ -867,32 +913,22 @@ def check_circuit_breaker():
     current_capital = get_crypto_capital()
     if current_capital <= 0:
         return False
-        
     memory = load_memory()
     peak = memory.get("crypto_peak", current_capital)
-    
-    # Si on est plus riche qu'avant, on enregistre le nouveau record !
     if current_capital > peak:
         memory["crypto_peak"] = current_capital
         save_memory(memory)
         return False
-        
-    # Calcul de la chute en pourcentage
     drawdown_pct = ((peak - current_capital) / peak) * 100
-    
-    # Paliers de chute acceptables selon le capital
     if peak < 100:
-        max_drop = 50.0   # -50% autorisé si < 100€
+        max_drop = 50.0
     elif peak < 1000:
-        max_drop = 30.0   # -30% autorisé si < 1000€
+        max_drop = 30.0
     elif peak < 5000:
-        max_drop = 20.0   # -20% autorisé si < 5000€
+        max_drop = 20.0
     else:
-        max_drop = 15.0   # -15% autorisé au-delà
-        
-    if drawdown_pct >= max_drop:
-        return True
-    return False
+        max_drop = 15.0
+    return drawdown_pct >= max_drop
 
 # ==================================================
 # DAY TRADING - CRYPTO SCALPING 24/7
@@ -900,15 +936,11 @@ def check_circuit_breaker():
 def scan_crypto():
     if trading_paused or vacation_mode or not coinbase:
         return
-        
-    # NOUVEAU DISJONCTEUR INTELLIGENT
     if check_circuit_breaker():
-        log("Circuit breaker: Chute du capital max atteinte, pause.")
+        log("Circuit breaker: drawdown max atteint, pause.")
         return
-
     if len(active_crypto_trades) >= MAX_CRYPTO_POSITIONS:
         return
-    
     cash_eur = get_crypto_balance("EUR")
     if cash_eur < 5:
         return
@@ -930,21 +962,16 @@ def scan_crypto():
         prices       = ta.get("prices", [])
         has_setup    = detect_breakout_setup(prices)
 
-        # STRATÉGIE 1 : Dip Buy sécurisé (On achète un creux UNIQUEMENT si la tendance de fond est haussière)
-        dip_buy = (rsi < 40 and strong_trend and price > ta["ma50"])
-        
-        # STRATÉGIE 2 : Breakout confirmé (Le prix casse une résistance AVEC une tendance de fond forte et du momentum)
+        dip_buy  = (rsi < 40 and strong_trend and price > ta["ma50"])
         breakout = (50 <= rsi <= 70 and strong_trend and has_setup)
 
         if dip_buy or breakout:
-            amount = cash_eur * CRYPTO_RISK_PER_TRADE
+            amount     = cash_eur * CRYPTO_RISK_PER_TRADE
             if amount < 2:
                 continue
-                
             strat_name = "Rebond" if dip_buy else "Breakout"
-            reason = strat_name + " confirmé | RSI=" + str(round(rsi, 0)) + " | Trend de fond OK"
+            reason     = strat_name + " | RSI=" + str(round(rsi, 0)) + " | Trend OK"
             place_crypto_order(symbol, "buy", amount, tp_pct=CRYPTO_TP_PCT, label="Scalping", reason=reason)
-            
         time.sleep(0.3)
 
 # ==================================================
@@ -962,17 +989,17 @@ def check_stock_risk():
         side    = trade.get("side", "long")
         if side == "long":
             if pnl_pct <= -STOCK_SL_PCT:
-                send_telegram("<b>Stop Loss</b> <b>" + symbol + "</b> -" + str(round(abs(pnl_pct), 1)) + "%")
+                send_telegram(ICO_RED + " <b>Stop Loss</b>  " + symbol + "  -" + str(round(abs(pnl_pct), 1)) + "%")
                 place_order(symbol, "sell", data["qty"], label="SL")
             elif pnl_pct >= tp_pct:
-                send_telegram("<b>Take Profit</b> <b>" + symbol + "</b> +" + str(round(pnl_pct, 1)) + "%")
+                send_telegram(ICO_GREEN + " <b>Take Profit</b>  " + symbol + "  +" + str(round(pnl_pct, 1)) + "%")
                 place_order(symbol, "sell", data["qty"], label="TP")
         elif side == "short":
             if pnl_pct <= -STOCK_SL_PCT:
-                send_telegram("<b>Stop Loss SHORT</b> <b>" + symbol + "</b> -" + str(round(abs(pnl_pct), 1)) + "%")
+                send_telegram(ICO_RED + " <b>Stop Loss SHORT</b>  " + symbol + "  -" + str(round(abs(pnl_pct), 1)) + "%")
                 place_order(symbol, "buy", abs(data["qty"]), label="SL")
             elif pnl_pct >= tp_pct:
-                send_telegram("<b>Take Profit SHORT</b> <b>" + symbol + "</b> +" + str(round(pnl_pct, 1)) + "%")
+                send_telegram(ICO_GREEN + " <b>Take Profit SHORT</b>  " + symbol + "  +" + str(round(pnl_pct, 1)) + "%")
                 place_order(symbol, "buy", abs(data["qty"]), label="TP")
 
 # ==================================================
@@ -984,20 +1011,15 @@ def check_crypto_risk():
     for symbol, trade in list(active_crypto_trades.items()):
         if symbol in CRYPTO_HOLD_STRICT:
             continue
-            
-        currency      = symbol.replace("-EUR", "")
-        balance       = get_crypto_balance(currency)
-        
-        # Auto-nettoyage de la mémoire si la crypto a été vendue manuellement ou est vide
+        currency = symbol.replace("-EUR", "")
+        balance  = get_crypto_balance(currency)
         if balance <= 0:
             with _lock:
                 active_crypto_trades.pop(symbol, None)
             continue
-            
         price = get_crypto_price(symbol)
         if not price:
             continue
-            
         entry         = trade.get("entry", price)
         tp_pct        = trade.get("tp_pct", CRYPTO_TP_PCT)
         gross_pnl_pct = ((price - entry) / entry * 100) if entry else 0
@@ -1012,34 +1034,25 @@ def check_crypto_risk():
         trailing_drop = ((current_peak - price) / current_peak * 100) if current_peak else 0
 
         if net_pnl_pct <= -CRYPTO_SL_PCT:
-            send_telegram(
-                "<b>Stop Loss crypto</b> " + symbol +
-                " (Net: -" + str(round(abs(net_pnl_pct), 1)) + "%)"
-            )
+            send_telegram(ICO_RED + " <b>Stop Loss</b>  " + symbol + "  -" + str(round(abs(net_pnl_pct), 1)) + "%")
             place_crypto_order(symbol, "sell", balance * price, label="SL")
         elif trailing_drop >= TRAILING_STOP_PCT and net_pnl_pct > 0:
-            send_telegram(
-                "<b>Trailing Stop</b> " + symbol +
-                " (-" + str(round(trailing_drop, 1)) + "% depuis pic)"
-            )
+            send_telegram(ICO_YELLOW + " <b>Trailing Stop</b>  " + symbol + "  -" + str(round(trailing_drop, 1)) + "% depuis pic")
             place_crypto_order(symbol, "sell", balance * price, label="TS")
         elif net_pnl_pct >= tp_pct:
-            send_telegram(
-                "<b>Take Profit crypto</b> " + symbol +
-                " (Net: +" + str(round(net_pnl_pct, 1)) + "%)"
-            )
+            send_telegram(ICO_GREEN + " <b>Take Profit</b>  " + symbol + "  +" + str(round(net_pnl_pct, 1)) + "%")
             place_crypto_order(symbol, "sell", balance * price, label="TP")
 
 def check_market_health():
     global trading_paused
     spy = get_spy_perf()
     if spy <= -10:
-        send_telegram("<b>CRASH !</b> SPY " + str(round(spy, 1)) + "%\nTape /urgence")
+        send_telegram(ICO_SOS + " <b>CRASH !</b>  SPY " + str(round(spy, 1)) + "%\nTape /urgence")
     elif spy <= -5:
         trading_paused = True
-        send_telegram("<b>Forte baisse SPY " + str(round(spy, 1)) + "%</b>\nDay trading suspendu.")
+        send_telegram(ICO_WARN + " <b>Forte baisse</b>  SPY " + str(round(spy, 1)) + "%\nDay trading suspendu.")
     elif spy <= -3:
-        send_telegram("Marche sous tension SPY " + str(round(spy, 1)) + "%")
+        send_telegram(ICO_WARN + " Marche sous tension  SPY " + str(round(spy, 1)) + "%")
 
 def check_custom_alerts():
     for symbol, target in list(custom_alerts.items()):
@@ -1048,7 +1061,7 @@ def check_custom_alerts():
         else:
             price = get_price(symbol)
         if price and price >= target:
-            send_telegram("<b>ALERTE !</b> <b>" + symbol + "</b> atteint " + str(round(price, 2)))
+            send_telegram(ICO_BELL + " <b>ALERTE !</b>  <b>" + symbol + "</b>  " + str(round(price, 2)) + " atteint " + ICO_CHECK)
             del custom_alerts[symbol]
 
 # ==================================================
@@ -1058,7 +1071,7 @@ def run_dca():
     if trading_paused or vacation_mode:
         send_telegram("DCA annule - pause.")
         return
-    send_telegram("<b>DCA mensuel</b> en cours...")
+    send_telegram(ICO_MONEY + " <b>DCA mensuel</b> en cours...")
     dca_eur = DCA_MONTHLY_EUR
     for symbol, alloc in CRYPTO_HOLD_ALLOC.items():
         amount = dca_eur * 0.70 * alloc
@@ -1076,7 +1089,7 @@ def run_dca():
             place_order(signal["symbol"].upper(), "buy", (dca_eur * 0.30) / price, label="DCA")
 
 # ==================================================
-# RAPPORTS
+# RAPPORTS TELEGRAM - DESIGN CARDS EPUREES
 # ==================================================
 def send_daily_report(immediate=False):
     account   = get_account_info()
@@ -1093,44 +1106,49 @@ def send_daily_report(immediate=False):
     btc_val   = get_crypto_balance("BTC") * (get_crypto_price("BTC-EUR") or 0)
     eth_val   = get_crypto_balance("ETH") * (get_crypto_price("ETH-EUR") or 0)
     cash_eur  = get_crypto_balance("EUR")
-    titre     = "<b>Rapport immediat</b>" if immediate else "<b>Rapport du soir</b>"
+    titre     = ICO_CHART + " <b>RAPPORT</b>" if immediate else ICO_CHART + " <b>RAPPORT DU SOIR</b>"
+    status    = "Vacances" if vacation_mode else "Pause" if trading_paused else "Actif"
+    market    = "Ouvert" if is_market_open() else "Ferme"
 
-    r = titre + "\n" + "=" * 22 + "\n\n"
-    r += "Actions : <b>$" + str(round(account["equity"], 2)) + "</b>\n"
-    r += "Crypto hold : ~" + str(round(btc_val + eth_val, 2)) + "EUR\n"
-    r += "Cash USD : $" + str(round(account["cash"], 2)) + " | EUR : " + str(round(cash_eur, 2)) + "EUR\n"
-    pnl_sign = "+" if account["pnl"] >= 0 else ""
-    r += "Aujourd hui : $" + pnl_sign + str(round(account["pnl"], 2)) + " | SPY : " + str(round(spy, 2)) + "%\n\n"
+    r  = titre + _sep()
+    r += ICO_PORT + "  <b>" + str(round(account["equity"], 2)) + "$</b>   " + _s(account["pnl"]) + " auj.\n"
+    r += ICO_BTC  + "  ~" + str(round(btc_val + eth_val, 2)) + " EUR hold\n"
+    r += ICO_MONEY + "  Cash  " + str(round(account["cash"], 2)) + "$  |  " + str(round(cash_eur, 2)) + " EUR\n"
+    r += ICO_WORLD + "  SPY " + _s(spy, prefix="", dec=2) + "%" + _sep()
 
-    r += "<b>Hold (" + str(int(HOLD_PCT * 100)) + "%) - " + str(len(hold_pos)) + " pos</b>\n"
-    for s, d in hold_pos.items():
-        hp   = load_memory()["hold_portfolio"].get(s, {})
-        sign = "+" if d["pnl_pct"] >= 0 else ""
-        r   += "  <b>" + s + "</b> $" + str(round(d["value"], 2)) + " (" + sign + str(round(d["pnl_pct"], 2)) + "%) [" + hp.get("horizon", "?") + "]\n"
-    if not hold_pos:
-        r += "  (Claude cherche)\n"
+    r += ICO_HOLD + " <b>HOLD (" + str(int(HOLD_PCT * 100)) + "%)  " + str(len(hold_pos)) + " pos</b>\n"
+    if hold_pos:
+        for s, d in hold_pos.items():
+            hp   = load_memory()["hold_portfolio"].get(s, {})
+            sign = "+" if d["pnl_pct"] >= 0 else ""
+            r   += "  <b>" + s + "</b>  " + str(round(d["value"], 0)) + "$  " + sign + str(round(d["pnl_pct"], 1)) + "%  [" + hp.get("horizon", "?") + "]\n"
+    else:
+        r += "  En recherche...\n"
 
-    r += "\n<b>Day Trade (" + str(int(DAYTRADE_PCT * 100)) + "%) - " + str(len(trade_pos)) + " pos</b>\n"
-    for s, d in trade_pos.items():
-        t    = active_stock_trades.get(s, {})
-        sign = "+" if d["pnl_pct"] >= 0 else ""
-        r   += "  <b>" + s + "</b> $" + str(round(d["value"], 2)) + " (" + sign + str(round(d["pnl_pct"], 2)) + "%) TP:+" + str(t.get("tp_pct", STOCK_TP_PCT)) + "%\n"
-    if not trade_pos:
-        r += "  (aucune)\n"
+    r += "\n" + ICO_TRADE + " <b>DAY TRADE (" + str(int(DAYTRADE_PCT * 100)) + "%)  " + str(len(trade_pos)) + " pos</b>\n"
+    if trade_pos:
+        for s, d in trade_pos.items():
+            t    = active_stock_trades.get(s, {})
+            sign = "+" if d["pnl_pct"] >= 0 else ""
+            r   += "  <b>" + s + "</b>  " + str(round(d["value"], 0)) + "$  " + sign + str(round(d["pnl_pct"], 1)) + "%  TP+" + str(t.get("tp_pct", STOCK_TP_PCT)) + "%\n"
+    else:
+        r += "  Aucun trade actif\n"
 
-    r += "\n<b>Crypto scalping - " + str(len(active_crypto_trades)) + "/" + str(MAX_CRYPTO_POSITIONS) + " pos</b>\n"
-    for s, t in active_crypto_trades.items():
-        entry   = t.get("entry") or 0
-        price   = get_crypto_price(s) or entry
-        net_pnl = ((price - entry) / entry * 100 - COINBASE_FEE_PCT) if entry else 0
-        sign    = "+" if net_pnl >= 0 else ""
-        r      += "  <b>" + s + "</b> " + str(round(t["amount"], 2)) + "EUR (" + sign + str(round(net_pnl, 1)) + "% net)\n"
+    r += "\n" + ICO_CRYPTO + " <b>SCALPING  " + str(len(active_crypto_trades)) + "/" + str(MAX_CRYPTO_POSITIONS) + " pos</b>\n"
+    if active_crypto_trades:
+        for s, t in active_crypto_trades.items():
+            entry   = t.get("entry") or 0
+            price   = get_crypto_price(s) or entry
+            net_pnl = ((price - entry) / entry * 100 - COINBASE_FEE_PCT) if entry else 0
+            sign    = "+" if net_pnl >= 0 else ""
+            r      += "  <b>" + s.replace("-EUR", "") + "</b>  " + str(round(t["amount"], 0)) + " EUR  " + sign + str(round(net_pnl, 1)) + "%\n"
+    else:
+        r += "  Aucun trade actif\n"
 
-    r += "\nSemaine :\n" + progress_bar(max(wk_pnl, 0), wk_goal) + " $" + ("+" if wk_pnl >= 0 else "") + str(round(wk_pnl, 2)) + "\n"
-    r += "\nReussite : " + str(round(stats["winrate"], 0)) + "% | PnL : $" + str(round(stats["total_pnl"], 2)) + "\n"
-    status = "vacances" if vacation_mode else "pause" if trading_paused else "actif"
-    market = "ouvert" if is_market_open() else "ferme"
-    r += "Bot: " + status + " | Marche: " + market
+    r += _sep()
+    r += ICO_TARGET + " Semaine\n" + _bar(max(wk_pnl, 0), wk_goal) + "  " + _s(wk_pnl) + "\n\n"
+    r += ICO_CHART + "  Win " + str(round(stats["winrate"], 0)) + "%   PnL " + _s(stats["total_pnl"]) + "\n"
+    r += ICO_BOT + "  " + status + "   " + market
     send_telegram(r)
 
 def send_weekly_report():
@@ -1150,20 +1168,20 @@ def send_weekly_report():
     yr_pnl = account["equity"] - yr
     vs_spy = account["pnl"] - (account["equity"] * spy / 100)
 
-    r  = "<b>RESUME SEMAINE</b>\n" + "=" * 22 + "\n\n"
-    r += "<b>$" + str(round(account["equity"], 2)) + "</b> | "
-    r += ("+" if wk_pnl >= 0 else "") + "$" + str(round(wk_pnl, 2)) + "\n"
-    r += "SPY : " + str(round(spy, 2)) + "% | "
-    r += ("Je bats le marche !" if vs_spy > 0 else "Marche > moi") + "\n\n"
-    r += "Semaine : " + progress_bar(max(wk_pnl, 0), wk * WEEKLY_GOAL_PCT / 100) + " $" + ("+" if wk_pnl >= 0 else "") + str(round(wk_pnl, 2)) + "\n"
-    r += "Mois    : " + progress_bar(max(mo_pnl, 0), MONTHLY_GOAL_EUR) + " $" + ("+" if mo_pnl >= 0 else "") + str(round(mo_pnl, 2)) + "\n"
-    r += "Annee   : " + progress_bar(max(yr_pnl, 0), yr * ANNUAL_GOAL_PCT / 100) + " $" + ("+" if yr_pnl >= 0 else "") + str(round(yr_pnl, 2)) + "\n\n"
-    r += str(len(wk_trades)) + " trades | " + str(round(stats["winrate"], 0)) + "% reussite\n"
+    r  = ICO_CAL + " <b>RESUME SEMAINE</b>" + _sep()
+    r += ICO_PORT + "  <b>" + str(round(account["equity"], 2)) + "$</b>   " + _s(wk_pnl) + " cette semaine\n"
+    r += ICO_WORLD + "  SPY " + _s(spy, prefix="", dec=2) + "%   "
+    r += ("Je bats le marche " + ICO_CHECK if vs_spy > 0 else "Marche > moi " + ICO_DOWN) + _sep()
+    r += ICO_TARGET + " <b>OBJECTIFS</b>\n"
+    r += "Sem.   " + _bar(max(wk_pnl, 0), wk * WEEKLY_GOAL_PCT / 100) + "  " + _s(wk_pnl) + "\n"
+    r += "Mois   " + _bar(max(mo_pnl, 0), MONTHLY_GOAL_EUR)           + "  " + _s(mo_pnl) + "\n"
+    r += "Annee  " + _bar(max(yr_pnl, 0), yr * ANNUAL_GOAL_PCT / 100) + "  " + _s(yr_pnl) + _sep()
+    r += ICO_CHART + "  " + str(len(wk_trades)) + " trades   " + str(round(stats["winrate"], 0)) + "% win\n"
     if best and best.get("pnl"):
-        r += "Meilleur: " + best["symbol"] + " +$" + str(round(best["pnl"], 2)) + "\n"
+        r += ICO_BEST + "  " + best["symbol"] + "  +" + str(round(best["pnl"], 2)) + "$\n"
     if worst and worst.get("pnl"):
-        r += "Pire: " + worst["symbol"] + " $" + str(round(worst["pnl"], 2)) + "\n"
-    r += "\nBonne semaine !"
+        r += ICO_WORST + "  " + worst["symbol"] + "  " + str(round(worst["pnl"], 2)) + "$\n"
+    r += "\nBonne semaine ! " + ICO_MUSCLE
     send_telegram(r)
 
 def send_monthly_report():
@@ -1177,15 +1195,16 @@ def send_monthly_report():
     yr_pnl   = account["equity"] - yr
     total_m  = ms["wins"] + ms["losses"]
 
-    r  = "<b>BILAN " + datetime.now().strftime("%B %Y").upper() + "</b>\n" + "=" * 22 + "\n\n"
-    r += "<b>$" + str(round(account["equity"], 2)) + "</b> | Ce mois : $" + ("+" if mo_pnl >= 0 else "") + str(round(mo_pnl, 2)) + "\n\n"
-    r += "Mois  : " + progress_bar(max(mo_pnl, 0), MONTHLY_GOAL_EUR) + " $" + ("+" if mo_pnl >= 0 else "") + str(round(mo_pnl, 2)) + "\n"
-    r += "Annee : " + progress_bar(max(yr_pnl, 0), yr * ANNUAL_GOAL_PCT / 100) + " $" + ("+" if yr_pnl >= 0 else "") + str(round(yr_pnl, 2)) + "\n\n"
-    r += str(len(ms.get("trades", []))) + " trades"
+    r  = ICO_MOIS + " <b>BILAN " + datetime.now().strftime("%B %Y").upper() + "</b>" + _sep()
+    r += ICO_PORT + "  <b>" + str(round(account["equity"], 2)) + "$</b>   " + _s(mo_pnl) + " ce mois" + _sep()
+    r += ICO_TARGET + " <b>OBJECTIFS</b>\n"
+    r += "Mois   " + _bar(max(mo_pnl, 0), MONTHLY_GOAL_EUR)           + "  " + _s(mo_pnl) + "\n"
+    r += "Annee  " + _bar(max(yr_pnl, 0), yr * ANNUAL_GOAL_PCT / 100) + "  " + _s(yr_pnl) + _sep()
+    r += ICO_CHART + "  " + str(len(ms.get("trades", []))) + " trades"
     if total_m > 0:
-        r += " | " + str(round(ms["wins"] / total_m * 100, 0)) + "% reussite"
+        r += "   " + str(round(ms["wins"] / total_m * 100, 0)) + "% win"
     if mo_pnl > 0:
-        r += "\nImpot estime (30%) : ~$" + str(round(mo_pnl * 0.30, 2))
+        r += "\n" + ICO_NOTE + "  Impot ~" + str(round(mo_pnl * 0.30, 2)) + "$ (30%)"
     send_telegram(r)
 
 def send_annual_report():
@@ -1198,17 +1217,17 @@ def send_annual_report():
     total_y  = ys["wins"] + ys["losses"]
     proj_5y  = account["equity"] * ((1 + yr_pnl / max(yr, 1)) ** 5)
 
-    r  = "<b>BILAN ANNUEL " + year + "</b>\n" + "=" * 22 + "\n\n"
-    r += "<b>$" + str(round(account["equity"], 2)) + "</b> | PnL : $" + ("+" if yr_pnl >= 0 else "") + str(round(yr_pnl, 2)) + "\n\n"
-    r += "Objectif +" + str(ANNUAL_GOAL_PCT) + "% :\n"
-    r += progress_bar(max(yr_pnl, 0), yr * ANNUAL_GOAL_PCT / 100) + " $" + ("+" if yr_pnl >= 0 else "") + str(round(yr_pnl, 2)) + "\n\n"
-    r += str(total_y) + " trades"
+    r  = ICO_YEAR + " <b>BILAN ANNUEL " + year + "</b>" + _sep()
+    r += ICO_PORT + "  <b>" + str(round(account["equity"], 2)) + "$</b>   " + _s(yr_pnl) + " cette annee" + _sep()
+    r += ICO_TARGET + " Objectif +" + str(ANNUAL_GOAL_PCT) + "%\n"
+    r += _bar(max(yr_pnl, 0), yr * ANNUAL_GOAL_PCT / 100) + "  " + _s(yr_pnl) + _sep()
+    r += ICO_CHART + "  " + str(total_y) + " trades"
     if total_y > 0:
-        r += " | " + str(round(ys["wins"] / total_y * 100, 0)) + "% reussite"
-    r += "\nProjection 5 ans : ~$" + str(round(proj_5y, 2)) + "\n"
+        r += "   " + str(round(ys["wins"] / total_y * 100, 0)) + "% win"
+    r += "\n" + ICO_UP + "  Proj. 5 ans  ~" + str(round(proj_5y, 0)) + "$\n"
     if yr_pnl > 0:
-        r += "Impot estime (30%) : ~$" + str(round(yr_pnl * 0.30, 2)) + "\n"
-    r += "\nBonne annee !"
+        r += ICO_NOTE + "  Impot ~" + str(round(yr_pnl * 0.30, 2)) + "$ (30%)\n"
+    r += "\nBonne annee ! " + ICO_ROCKET
     send_telegram(r)
 
 def send_morning_briefing():
@@ -1222,49 +1241,70 @@ def send_morning_briefing():
     wk_pnl    = account["equity"] - wk
     wk_goal   = wk * WEEKLY_GOAL_PCT / 100
 
-    r  = "<b>BRIEFING MATIN</b>\n" + "=" * 22 + "\n\n"
-    r += "$" + str(round(account["equity"], 2)) + " | Cash EUR : " + str(round(cash_eur, 2)) + "EUR\n"
-    r += "SPY : " + str(round(spy, 2)) + "%\n\n"
-    r += "BTC : " + str(round(btc_price, 2)) + "EUR | ETH : " + str(round(eth_price, 2)) + "EUR\n"
-    r += "Scalping actif : " + str(len(active_crypto_trades)) + "/" + str(MAX_CRYPTO_POSITIONS) + "\n\n"
-    r += "Semaine : " + progress_bar(max(wk_pnl, 0), wk_goal) + " $" + ("+" if wk_pnl >= 0 else "") + str(round(wk_pnl, 2)) + "\n"
+    intl = []
+    for ticker, name in [("EWJ", "JP"), ("FXI", "CN"), ("EWG", "DE"), ("EWU", "UK")]:
+        p = get_market_perf(ticker)
+        intl.append(name + " " + _s(p, prefix="", dec=1) + "%")
+
     if spy > 0.5:
-        sentiment = "Favorable"
+        sentiment = "Favorable " + ICO_GREEN
     elif spy < -0.5:
-        sentiment = "Defavorable"
+        sentiment = "Defavorable " + ICO_RED
     else:
-        sentiment = "Neutre"
-    r += "\nSentiment : " + sentiment + "\nC est parti !"
+        sentiment = "Neutre " + ICO_YELLOW
+
+    r  = ICO_MORN + " <b>BRIEFING MATIN</b>" + _sep()
+    r += ICO_PORT + "  " + str(round(account["equity"], 2)) + "$   Cash EUR " + str(round(cash_eur, 2)) + "\n"
+    r += ICO_WORLD + "  SPY " + _s(spy, prefix="", dec=2) + "%   " + "  ".join(intl) + "\n"
+    r += "Sentiment  " + sentiment + _sep()
+    r += ICO_BTC + "  BTC  " + str(round(btc_price, 0)) + " EUR\n"
+    r += "   ETH  " + str(round(eth_price, 0)) + " EUR\n"
+    r += ICO_CRYPTO + "  Scalping  " + str(len(active_crypto_trades)) + "/" + str(MAX_CRYPTO_POSITIONS) + " pos" + _sep()
+    r += ICO_TARGET + " Semaine\n" + _bar(max(wk_pnl, 0), wk_goal) + "  " + _s(wk_pnl) + "\n"
+    r += "\nC est parti ! " + ICO_ROCKET
     send_telegram(r)
 
 # ==================================================
 # COMMANDES TELEGRAM
 # ==================================================
 def cmd_aide():
-    send_telegram(
-        "<b>Commandes</b>\n\n"
-        "/status | /positions | /hold\n"
-        "/crypto | /report | /historique\n"
-        "/marche | /objectifs\n"
-        "/technique NVDA\n"
-        "/pourquoi BTC-EUR\n\n"
-        "/briefing | /semaine\n"
-        "/mois | /annee\n\n"
-        "/pause | /resume\n"
-        "/vacances | /retour\n\n"
-        "/alerte BTC-EUR 90000\n"
-        "/alertes\n"
-        "/scan_holdings\n\n"
-        "/urgence - Ferme les trades\n"
-        "(poche hold conservee)"
-    )
+    lines = [
+        ICO_BOT + " <b>COMMANDES</b>" + _sep(),
+        ICO_PORT  + "  /status",
+        ICO_HOLD  + "  /hold",
+        ICO_TRADE + "  /positions",
+        ICO_CRYPTO + "  /crypto",
+        ICO_CHART + "  /report",
+        ICO_HIST  + "  /historique",
+        ICO_WORLD + "  /marche",
+        ICO_TARGET + "  /objectifs",
+        "      /technique NVDA",
+        ICO_BRAIN + "  /pourquoi BTC-EUR",
+        _sep(),
+        ICO_MORN + "  /briefing",
+        ICO_CAL  + "  /semaine",
+        ICO_MOIS + "  /mois",
+        ICO_YEAR + "  /annee",
+        _sep(),
+        ICO_BELL + "  /alerte BTC-EUR 90000",
+        "      /alertes",
+        "      /scan_holdings",
+        _sep(),
+        ICO_PAUSE + "  /pause",
+        ICO_PLAY  + "  /resume",
+        ICO_BEACH + "  /vacances  |  /retour",
+        _sep(),
+        ICO_SOS + "  /urgence   Tout fermer",
+        "      (hold conserve)",
+    ]
+    send_telegram("\n".join(lines))
 
 def cmd_pourquoi(symbol):
     symbol = symbol.upper()
     trade  = active_crypto_trades.get(symbol)
     if trade:
         send_telegram(
-            "<b>Raisonnement " + symbol + " :</b>\n\n" +
+            ICO_BRAIN + " <b>RAISONNEMENT  " + symbol + "</b>" + _sep() +
             trade.get("reason", "Non sauvegarde.")
         )
     else:
@@ -1287,90 +1327,102 @@ def cmd_status():
     btc_val   = get_crypto_balance("BTC") * (get_crypto_price("BTC-EUR") or 0)
     eth_val   = get_crypto_balance("ETH") * (get_crypto_price("ETH-EUR") or 0)
     cash_eur  = get_crypto_balance("EUR")
+    status    = "Vacances " + ICO_BEACH if vacation_mode else "Pause " + ICO_PAUSE if trading_paused else "Actif " + ICO_CHECK
+    market    = "Ouvert " + ICO_GREEN if is_market_open() else "Ferme " + ICO_RED
 
-    pnl_sign = "+" if account["pnl"] >= 0 else ""
-    send_telegram(
-        "<b>Portefeuille</b>\n\n"
-        "Actions : <b>$" + str(round(account["equity"], 2)) + "</b>\n"
-        "Crypto hold : ~" + str(round(btc_val + eth_val, 2)) + "EUR\n"
-        "Cash USD : $" + str(round(account["cash"], 2)) + " | EUR : " + str(round(cash_eur, 2)) + "EUR\n"
-        "Aujourd hui : $" + pnl_sign + str(round(account["pnl"], 2)) + "\n\n"
-        "Hold : " + str(len(hold_pos)) + " pos | Trade : " + str(len(trade_pos)) + " pos | Scalping : " + str(len(active_crypto_trades)) + "/" + str(MAX_CRYPTO_POSITIONS) + "\n\n"
-        "Mois : $" + ("+" if ms["pnl"] >= 0 else "") + str(round(ms["pnl"], 2)) + " | Annee : $" + ("+" if ys["pnl"] >= 0 else "") + str(round(ys["pnl"], 2)) + "\n\n"
-        "Semaine :\n" + progress_bar(max(wk_pnl, 0), wk_goal) + " $" + ("+" if wk_pnl >= 0 else "") + str(round(wk_pnl, 2)) + "\n\n"
-        "Reussite : " + str(round(stats["winrate"], 0)) + "% | SPY : " + str(round(spy, 2)) + "%\n"
-        "Bot: " + ("vacances" if vacation_mode else "pause" if trading_paused else "actif") +
-        " | Marche: " + ("ouvert" if is_market_open() else "ferme")
-    )
+    r  = ICO_PORT + " <b>PORTEFEUILLE</b>" + _sep()
+    r += "Actions    <b>" + str(round(account["equity"], 2)) + "$</b>   " + _s(account["pnl"]) + "\n"
+    r += "Crypto     ~" + str(round(btc_val + eth_val, 2)) + " EUR\n"
+    r += "Cash       " + str(round(account["cash"], 2)) + "$   " + str(round(cash_eur, 2)) + " EUR\n"
+    r += "SPY        " + _s(spy, prefix="", dec=2) + "%" + _sep()
+    r += ICO_HOLD   + " Hold      " + str(len(hold_pos)) + " pos\n"
+    r += ICO_TRADE  + " Trades    " + str(len(trade_pos)) + " pos\n"
+    r += ICO_CRYPTO + " Scalping  " + str(len(active_crypto_trades)) + "/" + str(MAX_CRYPTO_POSITIONS) + " pos" + _sep()
+    r += ICO_CAL + "  Mois   " + _s(ms["pnl"]) + "\n"
+    r += ICO_YEAR + "  Annee  " + _s(ys["pnl"]) + "\n"
+    r += ICO_CHART + "  Win    " + str(round(stats["winrate"], 0)) + "%   PnL " + _s(stats["total_pnl"]) + _sep()
+    r += ICO_TARGET + " Semaine\n" + _bar(max(wk_pnl, 0), wk_goal) + "  " + _s(wk_pnl) + "\n\n"
+    r += status + "   " + market
+    send_telegram(r)
 
 def cmd_hold():
     memory    = load_memory()
     hold_port = memory.get("hold_portfolio", {})
     positions = get_positions()
     if not hold_port:
-        send_telegram("Poche hold vide - Claude cherche.")
+        send_telegram(ICO_HOLD + " <b>HOLD</b>" + _sep() + "Aucune position\nClaude analyse...")
         return
-    msg = "<b>Poche HOLD</b>\n\n"
+    r = ICO_HOLD + " <b>POCHE HOLD</b>" + _sep()
     for s, info in hold_port.items():
         pos  = positions.get(s, {})
-        pnl  = (" (" + ("+" if pos.get("pnl_pct", 0) >= 0 else "") + str(round(pos["pnl_pct"], 2)) + "%)") if pos else ""
-        msg += "<b>" + s + "</b> [" + info.get("horizon", "?") + "] depuis " + info.get("date", "?") + pnl + "\n"
-    send_telegram(msg)
+        pnl  = (" " + ("+" if pos.get("pnl_pct", 0) >= 0 else "") + str(round(pos["pnl_pct"], 1)) + "%") if pos else ""
+        val  = ("  " + str(round(pos.get("value", 0), 0)) + "$") if pos else ""
+        r   += "<b>" + s + "</b>" + val + pnl + "  [" + info.get("horizon", "?") + "]\n"
+        r   += "  depuis " + info.get("date", "?") + "\n\n"
+    send_telegram(r)
 
 def cmd_positions():
     positions = get_positions()
     hold_syms = set(load_memory().get("hold_portfolio", {}).keys())
     trade_pos = {s: d for s, d in positions.items() if s not in hold_syms}
     if not trade_pos:
-        send_telegram("Aucun day trade actif.")
+        send_telegram(ICO_TRADE + " <b>DAY TRADES</b>" + _sep() + "Aucun trade actif")
         return
-    msg = "<b>Day Trades actifs</b>\n\n"
+    r = ICO_TRADE + " <b>DAY TRADES</b>" + _sep()
     for s, d in trade_pos.items():
         t    = active_stock_trades.get(s, {})
-        side = t.get("side", "long")
+        side = "L" if t.get("side", "long") == "long" else "S"
         sign = "+" if d["pnl_pct"] >= 0 else ""
-        msg += "[" + side + "] <b>" + s + "</b> $" + str(round(d["value"], 2)) + " (" + sign + str(round(d["pnl_pct"], 2)) + "%) TP:+" + str(t.get("tp_pct", STOCK_TP_PCT)) + "%\n"
-    send_telegram(msg)
+        r   += "[" + side + "] <b>" + s + "</b>  " + str(round(d["value"], 0)) + "$  " + sign + str(round(d["pnl_pct"], 1)) + "%\n"
+        r   += "  TP +" + str(t.get("tp_pct", STOCK_TP_PCT)) + "%   SL -" + str(STOCK_SL_PCT) + "%\n\n"
+    send_telegram(r)
 
 def cmd_crypto():
     if not coinbase:
         send_telegram("Coinbase non connecte.")
         return
-    lines = []
-    total = 0
+    total    = 0
+    cash_eur = get_crypto_balance("EUR")
+    r = ICO_CRYPTO + " <b>CRYPTO</b>" + _sep()
+    r += ICO_HOLD + " <b>HOLD</b>\n"
     for symbol, alloc in CRYPTO_HOLD_ALLOC.items():
         currency = symbol.replace("-EUR", "")
         price    = get_crypto_price(symbol) or 0
         balance  = get_crypto_balance(currency)
         val      = balance * price
         total   += val
-        strict   = "HOLD strict" if symbol in CRYPTO_HOLD_STRICT else "HOLD souple"
-        lines.append("<b>" + currency + "</b> " + str(round(balance, 6)) + " = " + str(round(val, 2)) + "EUR [" + strict + "]")
-    cash_eur = get_crypto_balance("EUR")
-    msg  = "<b>Poche Hold Crypto</b>\n\n" + "\n".join(lines)
-    msg += "\n\nTotal hold : ~" + str(round(total, 2)) + "EUR\n"
-    msg += "Cash EUR : " + str(round(cash_eur, 2)) + "EUR\n"
-    msg += "\nScalping actif : " + str(len(active_crypto_trades)) + "/" + str(MAX_CRYPTO_POSITIONS) + " pos"
+        tag      = "strict" if symbol in CRYPTO_HOLD_STRICT else "souple"
+        r       += "  " + currency + "   " + str(round(val, 2)) + " EUR  [" + tag + "]\n"
+    r += "  Total  " + str(round(total, 2)) + " EUR\n"
+    r += "  Cash   " + str(round(cash_eur, 2)) + " EUR" + _sep()
+    r += ICO_TRADE + " <b>SCALPING  " + str(len(active_crypto_trades)) + "/" + str(MAX_CRYPTO_POSITIONS) + " pos</b>\n"
     if active_crypto_trades:
-        msg += "\n"
         for s, t in active_crypto_trades.items():
             entry   = t.get("entry") or 0
             price   = get_crypto_price(s) or entry
             net_pnl = ((price - entry) / entry * 100 - COINBASE_FEE_PCT) if entry else 0
             sign    = "+" if net_pnl >= 0 else ""
-            msg    += "  <b>" + s + "</b> " + str(round(t["amount"], 2)) + "EUR (" + sign + str(round(net_pnl, 1)) + "% net)\n"
-    send_telegram(msg)
+            r      += "  <b>" + s.replace("-EUR", "") + "</b>  " + str(round(t["amount"], 0)) + " EUR  " + sign + str(round(net_pnl, 1)) + "%\n"
+    else:
+        r += "  Aucun trade actif\n"
+    send_telegram(r)
 
 def cmd_marche():
-    spy  = get_spy_perf()
-    intl = []
-    for ticker, name in [("EWJ", "Japon"), ("FXI", "Chine"), ("EWG", "Allemagne"), ("EWU", "UK")]:
-        p = get_market_perf(ticker)
-        intl.append(name + " : " + ("+" if p >= 0 else "") + str(round(p, 2)) + "%")
-    msg  = "<b>Marches</b>\n\nSPY : " + ("+" if spy >= 0 else "") + str(round(spy, 2)) + "%\n\n"
-    msg += "\n".join(intl)
-    msg += "\n\nMarche : " + ("ouvert" if is_market_open() else "ferme")
-    send_telegram(msg)
+    r = ICO_WORLD + " <b>MARCHES</b>" + _sep()
+    for ticker, name in [
+        ("SPY", "USA S&P500"),
+        ("QQQ", "Nasdaq"),
+        ("EWJ", "Japon"),
+        ("FXI", "Chine"),
+        ("EWG", "Allemagne"),
+        ("EWU", "UK"),
+    ]:
+        p     = get_market_perf(ticker)
+        arrow = ICO_UP if p >= 0 else ICO_DOWN
+        r    += arrow + "  " + name + "   " + _s(p, prefix="", dec=2) + "%\n"
+    r += _sep()
+    r += "Bourse : " + ("Ouverte " + ICO_GREEN if is_market_open() else "Fermee " + ICO_RED)
+    send_telegram(r)
 
 def cmd_technique(ticker):
     ta    = get_ta(ticker)
@@ -1379,10 +1431,27 @@ def cmd_technique(ticker):
         send_telegram("Impossible d analyser " + ticker + ".")
         return
     wr  = get_winrate(ticker)
-    msg = "<b>" + ticker + "</b> $" + str(round(price, 2)) + "\n\n" + format_ta(ta)
+    rsi = ta.get("rsi") or 0
+    if rsi < 30:
+        rsi_label = "Survendu " + ICO_GREEN
+    elif rsi > 70:
+        rsi_label = "Surachete " + ICO_RED
+    else:
+        rsi_label = "Neutre " + ICO_YELLOW
+    trend = "Haussier " + ICO_UP if ta.get("trend") == "haussier" else "Baissier " + ICO_DOWN
+    ma20  = "Au-dessus " + ICO_CHECK if ta.get("above_ma20") else "En-dessous " + ICO_WARN
+
+    r  = ICO_CHART + " <b>" + ticker + "</b>" + _sep()
+    r += "Prix   <b>" + str(round(price, 2)) + "$</b>\n"
+    if ta.get("week_perf"):
+        r += "7j     " + _s(ta["week_perf"], prefix="", dec=1) + "%\n"
+    r += _sep()
+    r += "RSI    " + str(rsi) + "   " + rsi_label + "\n"
+    r += "Trend  " + trend + "\n"
+    r += "MA20   " + ma20 + "\n"
     if wr:
-        msg += "Reussite : " + str(round(wr, 0)) + "%"
-    send_telegram(msg)
+        r += _sep() + "Win rate  " + str(round(wr, 0)) + "%"
+    send_telegram(r)
 
 def cmd_objectifs():
     account  = get_account_info()
@@ -1393,47 +1462,53 @@ def cmd_objectifs():
     wk_pnl = account["equity"] - wk
     mo_pnl = account["equity"] - mo
     yr_pnl = account["equity"] - yr
-    send_telegram(
-        "<b>Objectifs</b>\n\n"
-        "Semaine (+" + str(WEEKLY_GOAL_PCT) + "%) :\n" +
-        progress_bar(max(wk_pnl, 0), wk * WEEKLY_GOAL_PCT / 100) +
-        "\n$" + ("+" if wk_pnl >= 0 else "") + str(round(wk_pnl, 2)) + "\n\n"
-        "Mois (+" + str(MONTHLY_GOAL_EUR) + "EUR) :\n" +
-        progress_bar(max(mo_pnl, 0), MONTHLY_GOAL_EUR) +
-        "\n$" + ("+" if mo_pnl >= 0 else "") + str(round(mo_pnl, 2)) + "\n\n"
-        "Annee (+" + str(ANNUAL_GOAL_PCT) + "%) :\n" +
-        progress_bar(max(yr_pnl, 0), yr * ANNUAL_GOAL_PCT / 100) +
-        "\n$" + ("+" if yr_pnl >= 0 else "") + str(round(yr_pnl, 2))
-    )
+
+    r  = ICO_TARGET + " <b>OBJECTIFS</b>" + _sep()
+    r += ICO_CAL + " Semaine  +" + str(WEEKLY_GOAL_PCT) + "%\n"
+    r += _bar(max(wk_pnl, 0), wk * WEEKLY_GOAL_PCT / 100) + "  " + _s(wk_pnl) + "\n\n"
+    r += ICO_MOIS + " Mois  +" + str(MONTHLY_GOAL_EUR) + " EUR\n"
+    r += _bar(max(mo_pnl, 0), MONTHLY_GOAL_EUR) + "  " + _s(mo_pnl) + "\n\n"
+    r += ICO_YEAR + " Annee  +" + str(ANNUAL_GOAL_PCT) + "%\n"
+    r += _bar(max(yr_pnl, 0), yr * ANNUAL_GOAL_PCT / 100) + "  " + _s(yr_pnl)
+    send_telegram(r)
 
 def cmd_historique():
     stats = get_stats()
     if not stats["recent"]:
-        send_telegram("Aucun trade.")
+        send_telegram(ICO_HIST + " <b>HISTORIQUE</b>" + _sep() + "Aucun trade enregistre")
         return
-    msg = "<b>5 derniers trades</b>\n\n"
+    r = ICO_HIST + " <b>HISTORIQUE</b>" + _sep()
     for t in reversed(stats["recent"]):
-        pnl  = (" | $" + ("+" if (t.get("pnl") or 0) >= 0 else "") + str(round(t["pnl"], 2))) if t.get("pnl") else ""
-        msg += t["date"] + " - " + t["side"].upper() + " <b>" + t["symbol"] + "</b> @ $" + str(round(t["price"], 2)) + pnl + "\n"
-    msg += "\n" + str(round(stats["winrate"], 0)) + "% | PnL : $" + str(round(stats["total_pnl"], 2))
-    send_telegram(msg)
+        side = "LONG" if t["side"] == "buy" else ("SHORT" if t["side"] == "short" else "VENTE")
+        pnl  = ("   " + _s(t["pnl"])) if t.get("pnl") else ""
+        r   += "<b>" + t["symbol"] + "</b>  " + side + "  @" + str(round(t["price"], 2)) + "$" + pnl + "\n"
+        r   += "  " + t["date"] + "\n\n"
+    r += _sep()
+    r += "Win " + str(round(stats["winrate"], 0)) + "%   PnL " + _s(stats["total_pnl"])
+    send_telegram(r)
 
 def cmd_pause():
     global trading_paused
     trading_paused = True
-    send_telegram("<b>Pause</b>\nStop loss actif. Tape /resume.")
+    send_telegram(
+        ICO_PAUSE + " <b>PAUSE</b>" + _sep() +
+        "Nouveaux trades suspendus\n"
+        "Stop loss toujours actif " + ICO_CHECK + "\n\n"
+        "Tape /resume pour reprendre"
+    )
 
 def cmd_resume():
     global trading_paused, vacation_mode
     trading_paused = False
     vacation_mode  = False
-    
-    # On réinitialise le record de capital pour débloquer le disjoncteur
     memory = load_memory()
     memory["crypto_peak"] = get_crypto_capital()
     save_memory(memory)
-    
-    send_telegram("<b>Trading repris !</b>\nDisjoncteur réinitialisé.")
+    send_telegram(
+        ICO_PLAY + " <b>TRADING REPRIS</b>" + _sep() +
+        "Bot actif " + ICO_CHECK + "\n"
+        "Disjoncteur reinitialise " + ICO_CHECK
+    )
 
 def cmd_urgence():
     global trading_paused
@@ -1443,11 +1518,17 @@ def cmd_urgence():
     trade_pos    = {s: d for s, d in positions.items() if s not in hold_syms}
     crypto_count = len([s for s in active_crypto_trades if s not in CRYPTO_HOLD_STRICT])
     if not trade_pos and not crypto_count:
-        send_telegram("Aucun trade actif.\nPoche hold conservee.")
+        send_telegram(
+            ICO_SOS + " <b>URGENCE</b>" + _sep() +
+            "Aucun trade a fermer\n"
+            "Poche hold conservee " + ICO_CHECK
+        )
         return
     send_telegram(
-        "<b>URGENCE</b>\nFermeture " + str(len(trade_pos)) + " action(s) + " +
-        str(crypto_count) + " crypto(s)...\nHold conserve."
+        ICO_SOS + " <b>URGENCE  FERMETURE EN COURS</b>" + _sep() +
+        "Actions  " + str(len(trade_pos)) + "\n"
+        "Crypto   " + str(crypto_count) + "\n"
+        "Hold conserve " + ICO_CHECK
     )
     for s, d in trade_pos.items():
         place_order(s, "sell", abs(d["qty"]), label="URGENCE")
@@ -1459,19 +1540,28 @@ def cmd_urgence():
         price    = get_crypto_price(symbol) or 0
         if balance > 0 and price > 0:
             place_crypto_order(symbol, "sell", balance * price, label="URGENCE")
-    send_telegram("Trades fermes.\nTape /resume.")
+    send_telegram(ICO_CHECK + " Tout ferme   Tape /resume")
 
 def cmd_vacances():
     global vacation_mode, trading_paused
     vacation_mode  = True
     trading_paused = True
-    send_telegram("<b>Mode vacances</b>\nHold conserve\nStop loss actif\nAucun nouveau trade\nTape /retour !")
+    send_telegram(
+        ICO_BEACH + " <b>MODE VACANCES</b>" + _sep() +
+        "Hold conserve         " + ICO_CHECK + "\n"
+        "Stop loss actif       " + ICO_CHECK + "\n"
+        "Nouveaux trades OFF   " + ICO_CHECK + "\n\n"
+        "Tape /retour a ton retour !"
+    )
 
 def cmd_retour():
     global vacation_mode, trading_paused
     vacation_mode  = False
     trading_paused = False
-    send_telegram("<b>Bon retour !</b>")
+    send_telegram(
+        ICO_WAVE + " <b>BON RETOUR !</b>" + _sep() +
+        "Trading repris " + ICO_CHECK
+    )
     send_daily_report(immediate=True)
 
 def cmd_alerte(args):
@@ -1479,23 +1569,26 @@ def cmd_alerte(args):
         symbol = args[0].upper()
         target = float(args[1])
         custom_alerts[symbol] = target
-        send_telegram("Alerte : <b>" + symbol + "</b> -> " + str(target))
+        send_telegram(
+            ICO_BELL + " <b>ALERTE CREEE</b>" + _sep() +
+            "<b>" + symbol + "</b>   cible  " + str(target)
+        )
     except Exception:
         send_telegram("Format : /alerte BTC-EUR 90000")
 
 def cmd_voir_alertes():
     if not custom_alerts:
-        send_telegram("Aucune alerte.")
+        send_telegram(ICO_BELL + " <b>ALERTES</b>" + _sep() + "Aucune alerte active")
         return
-    msg = "<b>Alertes actives</b>\n\n"
+    r = ICO_BELL + " <b>ALERTES ACTIVES</b>" + _sep()
     for s, t in custom_alerts.items():
         if "-EUR" in s:
             p = get_crypto_price(s)
         else:
             p = get_price(s)
-        diff = (" (" + str(round(abs((p - t) / t * 100), 1)) + "% restant)") if p else ""
-        msg += "<b>" + s + "</b> -> " + str(t) + diff + "\n"
-    send_telegram(msg)
+        diff = ("   " + str(round(abs((p - t) / t * 100), 1)) + "% restant") if p else ""
+        r   += "<b>" + s + "</b>   " + str(t) + diff + "\n"
+    send_telegram(r)
 
 # ==================================================
 # HANDLER TELEGRAM
@@ -1518,53 +1611,29 @@ def handle_telegram():
                 cmd   = parts[0].lower()
                 args  = parts[1:] if len(parts) > 1 else []
 
-                if cmd in ["/aide", "/start"]:
-                    cmd_aide()
-                elif cmd in ["/status", "/statut"]:
-                    cmd_status()
-                elif cmd == "/positions":
-                    cmd_positions()
-                elif cmd == "/hold":
-                    cmd_hold()
-                elif cmd == "/crypto":
-                    cmd_crypto()
-                elif cmd == "/report":
-                    send_daily_report(immediate=True)
-                elif cmd == "/historique":
-                    cmd_historique()
-                elif cmd == "/marche":
-                    cmd_marche()
-                elif cmd == "/objectifs":
-                    cmd_objectifs()
-                elif cmd == "/briefing":
-                    send_morning_briefing()
-                elif cmd == "/semaine":
-                    send_weekly_report()
-                elif cmd == "/mois":
-                    send_monthly_report()
-                elif cmd == "/annee":
-                    send_annual_report()
-                elif cmd == "/pause":
-                    cmd_pause()
-                elif cmd == "/resume":
-                    cmd_resume()
-                elif cmd == "/urgence":
-                    cmd_urgence()
-                elif cmd == "/vacances":
-                    cmd_vacances()
-                elif cmd == "/retour":
-                    cmd_retour()
-                elif cmd == "/alertes":
-                    cmd_voir_alertes()
-                elif cmd == "/scan_holdings":
-                    check_existing_holdings()
-                    send_telegram("Scan termine.")
-                elif cmd == "/technique" and args:
-                    cmd_technique(args[0].upper())
-                elif cmd == "/pourquoi" and args:
-                    cmd_pourquoi(args[0].upper())
-                elif cmd == "/alerte" and len(args) >= 2:
-                    cmd_alerte(args)
+                if cmd in ["/aide", "/start"]:           cmd_aide()
+                elif cmd in ["/status", "/statut"]:      cmd_status()
+                elif cmd == "/positions":                cmd_positions()
+                elif cmd == "/hold":                     cmd_hold()
+                elif cmd == "/crypto":                   cmd_crypto()
+                elif cmd == "/report":                   send_daily_report(immediate=True)
+                elif cmd == "/historique":               cmd_historique()
+                elif cmd == "/marche":                   cmd_marche()
+                elif cmd == "/objectifs":                cmd_objectifs()
+                elif cmd == "/briefing":                 send_morning_briefing()
+                elif cmd == "/semaine":                  send_weekly_report()
+                elif cmd == "/mois":                     send_monthly_report()
+                elif cmd == "/annee":                    send_annual_report()
+                elif cmd == "/pause":                    cmd_pause()
+                elif cmd == "/resume":                   cmd_resume()
+                elif cmd == "/urgence":                  cmd_urgence()
+                elif cmd == "/vacances":                 cmd_vacances()
+                elif cmd == "/retour":                   cmd_retour()
+                elif cmd == "/alertes":                  cmd_voir_alertes()
+                elif cmd == "/scan_holdings":            check_existing_holdings(); send_telegram("Scan termine " + ICO_CHECK)
+                elif cmd == "/technique" and args:       cmd_technique(args[0].upper())
+                elif cmd == "/pourquoi" and args:        cmd_pourquoi(args[0].upper())
+                elif cmd == "/alerte" and len(args) >= 2: cmd_alerte(args)
         except Exception:
             pass
         time.sleep(2)
@@ -1610,7 +1679,7 @@ def thread_news_watcher():
             if news and news[0]["title"] != last_title:
                 last_title = news[0]["title"]
                 send_telegram(
-                    "<b>BREAKING NEWS MACRO</b>\n\n" +
+                    ICO_WARN + " <b>BREAKING NEWS MACRO</b>\n\n" +
                     news[0]["title"] + "\n" +
                     news[0].get("url", "")
                 )
@@ -1689,44 +1758,45 @@ def start_health_server():
 # ==================================================
 def main():
     send_telegram(
-        "<b>Trading Agent V8 - FUSION</b>\n\n"
-        "ALPACA (USD)\n"
-        "Hold " + str(int(HOLD_PCT * 100)) + "% - Claude choisit dynamiquement\n"
-        "Day Trade " + str(int(DAYTRADE_PCT * 100)) + "% - Long/Short toute la bourse\n"
-        "Max " + str(MAX_DAYTRADE_POSITIONS) + " pos simultanees | illimite/jour\n\n"
-        "COINBASE (EUR)\n"
-        "Hold strict - BTC 25% | ETH 15%\n"
-        "Hold souple - SOL/XRP/LINK\n"
-        "Scalping 24/7 - " + str(len(CRYPTO_UNIVERSE)) + " cryptos\n"
-        "Max " + str(MAX_CRYPTO_POSITIONS) + " pos simultanees\n\n"
-        "SL : -" + str(CRYPTO_SL_PCT) + "% crypto (net frais) | -" + str(STOCK_SL_PCT) + "% actions\n"
-        "Trailing stop : -" + str(TRAILING_STOP_PCT) + "% depuis pic\n"
-        "Disjoncteur actif : Drawdown dynamique par capital\n\n"
-        "Tape /aide"
+        ICO_BOT + " <b>Trading Agent V8  ONLINE</b>\n\n"
+        "ALPACA\n"
+        "Hold " + str(int(HOLD_PCT * 100)) + "%  Claude dynamique\n"
+        "Day Trade " + str(int(DAYTRADE_PCT * 100)) + "%  Long/Short\n"
+        "Max " + str(MAX_DAYTRADE_POSITIONS) + " pos  |  illimite/jour\n\n"
+        "COINBASE\n"
+        "Hold strict  BTC 25%  ETH 15%\n"
+        "Hold souple  SOL / XRP / LINK\n"
+        "Scalping 24/7  " + str(len(CRYPTO_UNIVERSE)) + " cryptos\n"
+        "Max " + str(MAX_CRYPTO_POSITIONS) + " pos\n\n"
+        "SL actions  -" + str(STOCK_SL_PCT) + "%\n"
+        "SL crypto   -" + str(CRYPTO_SL_PCT) + "% (net frais)\n"
+        "Trailing    -" + str(TRAILING_STOP_PCT) + "% depuis pic\n"
+        "Disjoncteur  drawdown dynamique\n\n"
+        "Tape /aide " + ICO_WAVE
     )
 
     check_existing_holdings()
     account = get_account_info()
     update_equity_checkpoints(account["equity"])
-    log("Capital Alpaca : $" + str(round(account["equity"], 2)) + " | Cash : $" + str(round(account["cash"], 2)))
+    log("Capital : $" + str(round(account["equity"], 2)) + " | Cash : $" + str(round(account["cash"], 2)))
 
-    threading.Thread(target=start_health_server, daemon=True).start()
-    threading.Thread(target=handle_telegram,     daemon=True).start()
-    threading.Thread(target=thread_crypto,       daemon=True).start()
-    threading.Thread(target=thread_stocks,       daemon=True).start()
-    threading.Thread(target=thread_risk,         daemon=True).start()
-    threading.Thread(target=thread_news_watcher, daemon=True).start()
-    threading.Thread(target=thread_scheduler,    daemon=True).start()
+    threading.Thread(target=start_health_server,  daemon=True).start()
+    threading.Thread(target=handle_telegram,      daemon=True).start()
+    threading.Thread(target=thread_crypto,        daemon=True).start()
+    threading.Thread(target=thread_stocks,        daemon=True).start()
+    threading.Thread(target=thread_risk,          daemon=True).start()
+    threading.Thread(target=thread_news_watcher,  daemon=True).start()
+    threading.Thread(target=thread_scheduler,     daemon=True).start()
 
-    log("Agent V8 - 7 threads actifs")
+    log("Agent V8  7 threads actifs")
 
     while True:
         time.sleep(60)
         log(
             "Alive | " + ("PAUSE" if trading_paused else "ACTIF") +
-            " | Marche " + ("OUVERT" if is_market_open() else "ferme") +
-            " | Actions: " + str(len(active_stock_trades)) +
-            " | Crypto: " + str(len(active_crypto_trades))
+            " | " + ("OUVERT" if is_market_open() else "ferme") +
+            " | Actions " + str(len(active_stock_trades)) +
+            " | Crypto " + str(len(active_crypto_trades))
         )
 
 
