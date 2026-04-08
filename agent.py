@@ -105,7 +105,7 @@ INTERVAL_SCHEDULER = 60
 # CLIENTS
 # ==================================================
 try:
-    trading_client = TradingClient(ALPACA_API_KEY, ALPACA_SECRET_KEY, paper=False)
+    trading_client = TradingClient(ALPACA_API_KEY, ALPACA_SECRET_KEY, paper=True)
     print("Alpaca TradingClient OK")
 except Exception as e:
     print("Alpaca TradingClient error: " + str(e))
