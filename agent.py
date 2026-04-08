@@ -3,15 +3,7 @@ import json
 import time
 import threading
 import requests
-import anthropic
-import re
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from alpaca.trading.client import TradingClient
-from alpaca.trading.requests import MarketOrderRequest, TakeProfitRequest, StopLossRequest
-from alpaca.trading.enums import OrderSide, TimeInForce, OrderClass
-from alpaca.data.historical import StockHistoricalDataClient
-from alpaca.data.requests import StockLatestBarRequest, StockBarsRequest
-from alpaca.data.timeframe import TimeFrame
 from coinbase.rest import RESTClient
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
@@ -21,35 +13,11 @@ load_dotenv()
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # CONFIGURATION
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-ALPACA_API_KEY    = os.getenv("ALPACA_API_KEY")
-ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY")
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 NEWS_API_KEY      = os.getenv("NEWS_API_KEY")
 TELEGRAM_TOKEN    = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID  = os.getenv("TELEGRAM_CHAT_ID")
 COINBASE_API_KEY  = os.getenv("COINBASE_API_KEY")
 COINBASE_SECRET   = os.getenv("COINBASE_SECRET_KEY")
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# PARAMETRES ALPACA (DOUBLE HORIZON)
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-MAX_HOLD_POSITIONS     = 8
-MAX_DAYTRADE_POSITIONS = 4
-STOCK_SL_PCT           = 3.0
-STOCK_TP_PCT           = 6.0
-STOCK_MIN_CONFIDENCE   = 75
-
-DAYTRADE_UNIVERSE = [
-    "AAPL","MSFT","NVDA","AMZN","GOOGL","META","TSLA",
-    "AMD","INTC","QCOM","AVGO","MU","ASML",
-    "JPM","BAC","GS","MS","V","MA","PYPL",
-    "LLY","UNH","JNJ","PFE","MRNA","ABBV",
-    "XOM","CVX","OXY",
-    "SHOP","UBER","ABNB","COIN","PLTR","RBLX","U",
-    "SNAP","ROKU","DKNG","HOOD","MELI","SE",
-    "QQQ","SPY","TQQQ","SQQQ","SPXL","UVXY","ARKK",
-    "XLK","XLF","XLE","XLV","XLI",
-]
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # PARAMETRES COINBASE (DAY TRADING ACTIF)
@@ -68,6 +36,7 @@ CRYPTO_MIN_CONFIDENCE         = 65
 COINBASE_FEE_PCT              = 1.2
 CRYPTO_CANDLE_WINDOW_HOURS    = 300
 CRYPTO_CIRCUIT_BREAKER_LOSSES = 3
+CRYPTO_TRADE_ALLOC_PCT        = 0.20
 
 CRYPTO_UNIVERSE = [
     "BTC-EUR","ETH-EUR","SOL-EUR","XRP-EUR","LINK-EUR",
@@ -79,7 +48,6 @@ CRYPTO_UNIVERSE = [
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # OBJECTIFS ET TIMERS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-WEEKLY_GOAL_PCT  = 1.0
 MONTHLY_GOAL_EUR = 100
 ANNUAL_GOAL_PCT  = 20.0
 DCA_MONTHLY_EUR  = 100
@@ -93,10 +61,6 @@ INTERVAL_SCHEDULER = 60
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # CLIENTS (LIVE TRADING)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-trading_client = TradingClient(ALPACA_API_KEY, ALPACA_SECRET_KEY, paper=False)
-data_client    = StockHistoricalDataClient(ALPACA_API_KEY, ALPACA_SECRET_KEY)
-claude_client  = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-
 try:
     coinbase = RESTClient(api_key=COINBASE_API_KEY, api_secret=COINBASE_SECRET)
 except Exception as e:
@@ -109,7 +73,6 @@ except Exception as e:
 trading_paused       = False
 vacation_mode        = False
 custom_alerts        = {}
-active_stock_trades  = {}
 active_crypto_trades = {}
 _lock                = threading.RLock()
 loss_streak          = 0
@@ -237,36 +200,6 @@ def get_best_worst(trades):
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # DONNEES MARCHE
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-def is_market_open():
-    try:
-        clock = trading_client.get_clock()
-        return clock.is_open
-    except Exception as e:
-        record_error(f"Erreur horloge Alpaca: {e}")
-        return False
-
-def get_account_info():
-    a = trading_client.get_account()
-    return {"equity": float(a.equity), "cash": float(a.cash),
-            "buying_power": float(a.buying_power),
-            "pnl": float(a.equity) - float(a.last_equity)}
-
-def get_positions():
-    return {p.symbol: {
-        "qty": float(p.qty), "value": float(p.market_value),
-        "avg_price": float(p.avg_entry_price),
-        "pnl": float(p.unrealized_pl),
-        "pnl_pct": float(p.unrealized_plpc) * 100,
-        "side": "long" if float(p.qty) > 0 else "short"
-    } for p in trading_client.get_all_positions()}
-
-def get_price(ticker):
-    try:
-        return data_client.get_stock_latest_bar(
-            StockLatestBarRequest(symbol_or_symbols=ticker))[ticker].close
-    except:
-        return None
-
 def get_crypto_price(symbol):
     try:
         if not coinbase: return None
@@ -285,17 +218,6 @@ def get_crypto_balance(currency):
     except:
         return 0
 
-def get_market_perf(ticker):
-    try:
-        cur  = data_client.get_stock_latest_bar(StockLatestBarRequest(symbol_or_symbols=ticker))[ticker].close
-        bars = list(data_client.get_stock_bars(StockBarsRequest(
-            symbol_or_symbols=ticker, timeframe=TimeFrame.Day,
-            start=datetime.now()-timedelta(days=3)))[ticker])
-        return ((cur-bars[-2].close)/bars[-2].close)*100 if len(bars) >= 2 else 0
-    except:
-        return 0
-
-def get_spy_perf(): return get_market_perf("SPY")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # ANALYSE TECHNIQUE
@@ -308,28 +230,6 @@ def calculate_rsi(prices, period=14):
     al = sum(losses[-period:])/period
     if al == 0: return 100
     return round(100-(100/(1+ag/al)),1)
-
-def get_ta(ticker, timeframe_type="day"):
-    try:
-        if timeframe_type == "hour":
-            req = StockBarsRequest(symbol_or_symbols=ticker, timeframe=TimeFrame.Hour,
-                                   start=datetime.now()-timedelta(days=10))
-        else:
-            req = StockBarsRequest(symbol_or_symbols=ticker, timeframe=TimeFrame.Day,
-                                   start=datetime.now()-timedelta(days=60))
-        prices = [bar.close for bar in data_client.get_stock_bars(req)[ticker]]
-        if not prices or len(prices) < 20: return None
-        rsi  = calculate_rsi(prices)
-        ma20 = sum(prices[-20:])/20
-        ma50 = sum(prices[-50:])/50 if len(prices) >= 50 else None
-        cur  = prices[-1]
-        return {"rsi": rsi, "ma20": ma20, "ma50": ma50, "current": cur,
-                "trend": "haussier" if (ma50 and ma20 > ma50) else "baissier",
-                "above_ma20": cur > ma20,
-                "above_ma50": cur > ma50 if ma50 else None,
-                "week_perf": ((cur-prices[-6])/prices[-6]*100) if len(prices) >= 6 else None}
-    except:
-        return None
 
 def get_crypto_ta(symbol):
     try:
@@ -382,86 +282,6 @@ def format_news(articles, count=3):
     return "\n".join([f"- {a['title']}" for a in articles[:count]]) or "Aucune news recente"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# CLAUDE IA
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-PROMPT_HOLD = """Tu es un gestionnaire de portefeuille long terme.
-Choisis dynamiquement les meilleurs actifs selon l'actu et le momentum.
-Univers : toutes les actions US tradables sur Alpaca.
-Reponds UNIQUEMENT en JSON :
-{"action":"BUY"|"HOLD","symbol":"TICKER","horizon":"court"|"moyen"|"long","confidence":0-100,"reason":"francais court","allocation_pct":10-50}
-Si aucune opportunite : {"action":"HOLD","symbol":"","horizon":"","confidence":0,"reason":"pas d opportunite","allocation_pct":0}"""
-
-PROMPT_STOCKS = """Tu es un day trader professionnel - actions US.
-Univers : toutes les actions US tradables sur Alpaca.
-Reponds UNIQUEMENT en JSON :
-{"action":"BUY"|"SHORT"|"HOLD","confidence":0-100,"reason":"francais court","risk_pct":5-25,"tp_pct":3-15}"""
-
-PROMPT_CRYPTO = """Tu es un day trader crypto hyperactif - analyse 24/7 sur bougies 1H.
-ATTENTION : Les frais de plateforme sont de ~1.2% aller-retour.
-Pour etre rentable, ton objectif de Take Profit (tp_pct) DOIT TOUJOURS etre superieur a 2%.
-Reponds UNIQUEMENT en JSON :
-{"action":"BUY"|"SHORT"|"HOLD","confidence":0-100,"reason":"francais court","risk_pct":10-30,"tp_pct":2-30}"""
-
-def ask_claude(prompt, user_msg):
-    try:
-        res = claude_client.messages.create(
-            model="claude-opus-4-5", max_tokens=400, system=prompt,
-            messages=[{"role":"user","content":user_msg}]
-        )
-        raw = res.content[0].text.strip()
-        match = re.search(r'\{.*\}', raw, re.DOTALL)
-        if match:
-            return json.loads(match.group(0))
-        return {"action":"HOLD","confidence":0,"reason":"JSON introuvable"}
-    except Exception as e:
-        record_error(f"Claude error: {e}")
-        return {"action":"HOLD","confidence":0,"reason":"Erreur Claude"}
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# ORDRES ALPACA (BRACKET - ACTIONS EN USD)
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-def place_order_bracket(symbol, side, qty, tp_pct, label="", reason=""):
-    try:
-        price = get_price(symbol)
-        if not price: return
-        sl_price   = round(price * (1 - STOCK_SL_PCT/100), 2)
-        tp_price   = round(price * (1 + tp_pct/100), 2)
-        order_side = OrderSide.BUY if side == "buy" else OrderSide.SELL
-        req = MarketOrderRequest(
-            symbol=symbol, qty=round(abs(qty),4), side=order_side,
-            time_in_force=TimeInForce.DAY,
-            order_class=OrderClass.BRACKET,
-            take_profit=TakeProfitRequest(limit_price=tp_price),
-            stop_loss=StopLossRequest(stop_price=sl_price)
-        )
-        trading_client.submit_order(req)
-        valeur = round(abs(qty)*price, 2)
-        record_trade(symbol, side, round(abs(qty),4), price)
-        with _lock:
-            active_stock_trades[symbol] = {"side":side, "entry":price, "tp_pct":tp_pct, "reason":reason}
-        send_telegram(f"<b>ORDRE BRACKET {label}</b> <b>{symbol}</b>\n~${valeur}\nTP: ${tp_price} (+{tp_pct}%)\nSL: ${sl_price} (-{STOCK_SL_PCT}%)\n<i>Gere par Alpaca.</i>")
-    except Exception as e:
-        record_error(f"Order {symbol}: {e}")
-        send_telegram(f"<b>Ordre echoue</b> {symbol}\n{str(e)[:100]}")
-
-def place_order(symbol, side, qty, label=""):
-    try:
-        order_side = OrderSide.BUY if side == "buy" else OrderSide.SELL
-        trading_client.submit_order(MarketOrderRequest(
-            symbol=symbol, qty=round(abs(qty),4),
-            side=order_side, time_in_force=TimeInForce.DAY
-        ))
-        price  = get_price(symbol)
-        valeur = round(abs(qty)*price,2) if price else "?"
-        record_trade(symbol, side, round(abs(qty),4), price or 0)
-        with _lock:
-            active_stock_trades.pop(symbol, None)
-        send_telegram(f"<b>Ordre {label}</b> <b>{symbol}</b> ~${valeur}")
-    except Exception as e:
-        record_error(f"Order {symbol}: {e}")
-        send_telegram(f"<b>Ordre echoue</b> {symbol}\n{str(e)[:100]}")
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # ORDRES COINBASE (CRYPTO EN EUR)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def place_crypto_order(symbol, side, amount_eur, tp_pct=None, label="", reason=""):
@@ -506,90 +326,12 @@ def place_crypto_order(symbol, side, amount_eur, tp_pct=None, label="", reason="
         send_telegram(f"<b>Ordre crypto echoue</b> {symbol}\n{str(e)[:100]}")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# POCHE HOLD - ALPACA
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-def manage_hold_portfolio():
-    if trading_paused or vacation_mode or not is_market_open(): return
-    account   = get_account_info()
-    positions = get_positions()
-    memory    = load_memory()
-    hold_port = memory.get("hold_portfolio", {})
-    hold_pos  = {s: d for s, d in positions.items() if s in hold_port}
-    if len(hold_pos) >= MAX_HOLD_POSITIONS: return
-    available  = account["cash"]
-    if available < 10: return
-    spy_perf   = get_spy_perf()
-    news_macro = format_news(get_news("stocks market economy", count=3))
-    signal = ask_claude(PROMPT_HOLD,
-        f"Cash disponible: ${available:.2f}\n"
-        f"SPY aujourd'hui: {spy_perf:+.2f}%\n"
-        f"News macro:\n{news_macro}\n"
-        f"Positions hold actuelles: {list(hold_port.keys()) or 'aucune'}\n"
-        f"Quel actif ajouter ou renforcer dans la poche hold ?"
-    )
-    if signal.get("action") == "HOLD" or not signal.get("symbol"): return
-    symbol  = signal["symbol"].upper()
-    conf    = signal.get("confidence", 0)
-    reason  = signal.get("reason", "")
-    horizon = signal.get("horizon", "moyen")
-    alloc   = signal.get("allocation_pct", 10) / 100
-    if conf < STOCK_MIN_CONFIDENCE: return
-    if signal["action"] == "BUY":
-        amount = available * alloc
-        price  = get_price(symbol)
-        if not price or amount < 1: return
-        memory["hold_portfolio"][symbol] = {"horizon": horizon, "entry": price, "date": datetime.now().strftime("%Y-%m-%d")}
-        save_memory(memory)
-        send_telegram(f"<b>HOLD {horizon.upper()}</b>\n<b>{symbol}</b> ${price:.2f}\n{reason}\nConfiance : {conf}%")
-        place_order(symbol, "buy", amount/price, label="Hold")
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# DAY TRADING - ALPACA (ACTIF - 1 HEURE)
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-def scan_stocks():
-    if trading_paused or vacation_mode or not is_market_open(): return
-    account   = get_account_info()
-    positions = get_positions()
-    hold_syms = set(load_memory().get("hold_portfolio", {}).keys())
-    trade_pos = {s: d for s, d in positions.items() if s not in hold_syms}
-    if len(trade_pos) >= MAX_DAYTRADE_POSITIONS: return
-    trade_capital = account["cash"]
-    if trade_capital < 5: return
-    for ticker in DAYTRADE_UNIVERSE:
-        if ticker in positions: continue
-        price = get_price(ticker)
-        ta    = get_ta(ticker, timeframe_type="hour")
-        if not price or not ta or (45 < ta['rsi'] < 55): continue
-        articles = get_news(ticker, count=2)
-        wr       = get_winrate(ticker)
-        signal   = ask_claude(PROMPT_STOCKS,
-            f"Ticker: {ticker} | Prix: ${price:.2f}\n"
-            f"Analyse technique (Bougies 1H):\n{format_ta(ta)}\n"
-            f"News:\n{format_news(articles)}\n"
-            + (f"Reussite historique: {wr:.0f}%\n" if wr else "")
-        )
-        action = signal.get("action","HOLD")
-        conf   = signal.get("confidence",0)
-        reason = signal.get("reason","")
-        tp_pct = signal.get("tp_pct", STOCK_TP_PCT)
-        risk   = signal.get("risk_pct", 5)
-        if conf < STOCK_MIN_CONFIDENCE: continue
-        qty = (trade_capital * risk / 100) / price
-        if action == "BUY" and account["cash"] >= qty * price:
-            place_order_bracket(ticker, "buy", qty, tp_pct=tp_pct, label="Day Trade", reason=reason)
-            break
-        elif action == "SHORT":
-            place_order_bracket(ticker, "sell", qty, tp_pct=tp_pct, label="Short Trade", reason=reason)
-            break
-        time.sleep(0.5)
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # DAY TRADING - CRYPTO (AGRESSIF)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def scan_crypto():
     if trading_paused or vacation_mode or not coinbase: return
     if loss_streak >= CRYPTO_CIRCUIT_BREAKER_LOSSES:
-        log(f"Circuit breaker: {loss_streak} pertes consécutives, scan crypto suspendu")
+        log(f"Circuit breaker: {loss_streak} pertes consecutives, scan crypto suspendu")
         return
     if len(active_crypto_trades) >= MAX_CRYPTO_POSITIONS: return
     cash_eur  = get_crypto_balance("EUR")
@@ -599,25 +341,15 @@ def scan_crypto():
         if symbol in active_crypto_trades: continue
         price = get_crypto_price(symbol)
         ta    = get_crypto_ta(symbol)
-        if not price or not ta or (45 < ta['rsi'] < 55): continue
-        articles = get_news(symbol, count=2)
-        wr       = get_winrate(symbol)
-        signal   = ask_claude(PROMPT_CRYPTO,
-            f"Ticker: {symbol} | Prix: {price:.4f}EUR\n"
-            f"Analyse technique (Bougies 1H):\n{format_ta(ta)}\n"
-            f"News:\n{format_news(articles)}\n"
-            + (f"Reussite historique: {wr:.0f}%\n" if wr else "")
-        )
-        action = signal.get("action","HOLD")
-        conf   = signal.get("confidence",0)
-        reason = signal.get("reason","")
-        tp_pct = signal.get("tp_pct", CRYPTO_TP_PCT)
-        risk   = signal.get("risk_pct", 15)
-        if conf < CRYPTO_MIN_CONFIDENCE: continue
-        amount = trade_cap * risk / 100
-        if amount < 2: continue
-        if action == "BUY":
-            place_crypto_order(symbol, "buy", amount, tp_pct=tp_pct, label="Day Trade", reason=reason)
+        if not price or not ta or not ta.get("rsi"): continue
+        rsi       = ta["rsi"]
+        trend     = ta["trend"]
+        above_ma20 = ta.get("above_ma20")
+        if rsi < 35 and trend == "haussier" and above_ma20:
+            amount = trade_cap * CRYPTO_TRADE_ALLOC_PCT
+            if amount < 2: continue
+            reason = f"RSI={rsi:.0f} survendu, tendance haussiere"
+            place_crypto_order(symbol, "buy", amount, tp_pct=CRYPTO_TP_PCT, label="Day Trade", reason=reason)
             break
         time.sleep(0.3)
 
@@ -644,18 +376,9 @@ def check_crypto_risk():
             send_telegram(f"<b>Take Profit crypto</b> {symbol} (Net: +{net_pnl_pct:.1f}%)")
             place_crypto_order(symbol, "sell", balance*price, label="TP")
 
-def check_market_health():
-    global trading_paused
-    spy = get_spy_perf()
-    if spy <= -10:
-        send_telegram(f"<b>CRASH !</b> SPY {spy:.1f}%\nTape /urgence")
-    elif spy <= -5:
-        trading_paused = True
-        send_telegram(f"<b>Forte baisse SPY {spy:.1f}%</b>\nDay trading suspendu.")
-
 def check_custom_alerts():
     for symbol, target in list(custom_alerts.items()):
-        price = get_crypto_price(symbol) if "-EUR" in symbol else get_price(symbol)
+        price = get_crypto_price(symbol)
         if price and price >= target:
             send_telegram(f"<b>ALERTE !</b> <b>{symbol}</b> atteint {price:.2f}")
             del custom_alerts[symbol]
@@ -669,138 +392,83 @@ def run_dca():
     send_telegram("<b>DCA mensuel</b> en cours...")
     dca_eur = DCA_MONTHLY_EUR
     for symbol, alloc in CRYPTO_HOLD_ALLOC.items():
-        amount = dca_eur * 0.70 * alloc
+        amount = dca_eur * alloc
         if amount >= 1:
             place_crypto_order(symbol, "buy", amount, label="DCA")
-    signal = ask_claude(PROMPT_HOLD,
-        f"DCA mensuel de ${dca_eur*0.30*1.08:.2f} disponible.\nQuel actif hold actions renforcer ce mois-ci ?\nPositions actuelles: {list(load_memory().get('hold_portfolio',{}).keys())}"
-    )
-    if signal.get("action") == "BUY" and signal.get("symbol"):
-        symbol = signal["symbol"].upper()
-        price  = get_price(symbol)
-        if price:
-            place_order(symbol, "buy", (dca_eur*0.30*1.08)/price, label="DCA")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # RAPPORTS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def send_daily_report(immediate=False):
-    account   = get_account_info()
-    positions = get_positions()
-    stats     = get_stats()
-    spy       = get_spy_perf()
-    checkpts  = get_equity_checkpoints()
-    hold_syms = set(load_memory().get("hold_portfolio",{}).keys())
-    hold_pos  = {s: d for s, d in positions.items() if s in hold_syms}
-    trade_pos = {s: d for s, d in positions.items() if s not in hold_syms}
-    wk        = checkpts.get("week", account["equity"])
-    wk_pnl    = account["equity"] - wk
-    btc_val   = get_crypto_balance("BTC") * (get_crypto_price("BTC-EUR") or 0)
-    eth_val   = get_crypto_balance("ETH") * (get_crypto_price("ETH-EUR") or 0)
-    titre     = "<b>Rapport immediat</b>" if immediate else "<b>Rapport du soir</b>"
+    stats    = get_stats()
+    btc_val  = get_crypto_balance("BTC") * (get_crypto_price("BTC-EUR") or 0)
+    eth_val  = get_crypto_balance("ETH") * (get_crypto_price("ETH-EUR") or 0)
+    cash_eur = get_crypto_balance("EUR")
+    titre    = "<b>Rapport immediat</b>" if immediate else "<b>Rapport du soir</b>"
     r  = f"{titre}\n{'='*22}\n\n"
-    r += f"Actions : <b>${account['equity']:.2f}</b>\n"
-    r += f"Crypto hold : ~{btc_val+eth_val:.2f}EUR\n"
-    r += f"Cash Dispo Alpaca: ${account['cash']:.2f}\n"
-    r += f"Cash Dispo Crypto: {get_crypto_balance('EUR'):.2f}EUR\n"
-    r += f"Aujourd'hui : ${account['pnl']:+.2f} | SPY : {spy:+.2f}%\n\n"
-    r += f"<b>Hold - {len(hold_pos)} positions</b>\n"
-    for s, d in hold_pos.items():
-        hp = load_memory()["hold_portfolio"].get(s,{})
-        r += f"  <b>{s}</b> ${d['value']:.2f} ({d['pnl_pct']:+.2f}%) [{hp.get('horizon','?')}]\n"
-    if not hold_pos: r += "  (aucune - Claude cherche)\n"
-    r += f"\n<b>Day Trade - {len(trade_pos)} actives</b>\n"
-    for s, d in trade_pos.items():
-        t = active_stock_trades.get(s,{})
-        r += f"  <b>{s}</b> ${d['value']:.2f} ({d['pnl_pct']:+.2f}%) TP:+{t.get('tp_pct',STOCK_TP_PCT)}%\n"
-    if not trade_pos: r += "  (aucune)\n"
-    r += f"\nSemaine :\n{progress_bar(max(wk_pnl,0), wk*WEEKLY_GOAL_PCT/100)} ${wk_pnl:+.2f}\n"
-    r += f"\nReussite : {stats['winrate']:.0f}% | PnL net : ${stats['total_pnl']:+.2f}\n"
-    r += f"Bot: {'vacances' if vacation_mode else 'pause' if trading_paused else 'actif'} | Marche: {'ouvert' if is_market_open() else 'ferme'}"
+    r += f"BTC hold : ~{btc_val:.2f}EUR\n"
+    r += f"ETH hold : ~{eth_val:.2f}EUR\n"
+    r += f"Cash EUR  : {cash_eur:.2f}EUR\n\n"
+    r += f"<b>Day Trades actifs : {len(active_crypto_trades)}/{MAX_CRYPTO_POSITIONS}</b>\n"
+    for s, t in active_crypto_trades.items():
+        entry = t.get("entry") or 0
+        price = get_crypto_price(s) or entry
+        pnl_pct = ((price - entry) / entry * 100 - COINBASE_FEE_PCT) if entry else 0
+        r += f"  <b>{s}</b> {t['amount']:.2f}EUR ({pnl_pct:+.1f}% net)\n"
+    r += f"\nReussite : {stats['winrate']:.0f}% | PnL net : {stats['total_pnl']:+.2f}EUR\n"
+    r += f"Bot: {'vacances' if vacation_mode else 'pause' if trading_paused else 'actif'}"
     send_telegram(r)
 
 def send_weekly_report():
-    account   = get_account_info()
-    stats     = get_stats()
-    spy       = get_spy_perf()
-    checkpts  = get_equity_checkpoints()
-    wk_ago    = (datetime.now()-timedelta(days=7)).strftime("%Y-%m-%d")
+    stats   = get_stats()
+    memory  = load_memory()
+    wk_ago  = (datetime.now()-timedelta(days=7)).strftime("%Y-%m-%d")
     wk_trades = [t for t in memory["trades"] if t["date"] >= wk_ago]
     best, worst = get_best_worst(wk_trades)
-    wk     = checkpts.get("week", account["equity"])
-    mo     = checkpts.get("month", account["equity"])
-    yr     = checkpts.get("year", account["equity"])
-    wk_pnl = account["equity"] - wk
-    mo_pnl = account["equity"] - mo
-    yr_pnl = account["equity"] - yr
-    vs_spy = account["pnl"] - (account["equity"]*spy/100)
+    ms      = get_monthly_stats()
+    ys      = get_annual_stats()
     r  = "<b>RESUME SEMAINE</b>\n" + "="*22 + "\n\n"
-    r += f"<b>${account['equity']:.2f}</b> | ${wk_pnl:+.2f}\n"
-    r += f"SPY : {spy:+.2f}% | {'Je bats le marche !' if vs_spy>0 else 'Marche > moi'}\n\n"
-    r += f"Semaine : {progress_bar(max(wk_pnl,0), wk*WEEKLY_GOAL_PCT/100)} ${wk_pnl:+.2f}\n"
-    r += f"Mois    : {progress_bar(max(mo_pnl,0), MONTHLY_GOAL_EUR*1.08)} ${mo_pnl:+.2f}\n"
-    r += f"Annee   : {progress_bar(max(yr_pnl,0), yr*ANNUAL_GOAL_PCT/100)} ${yr_pnl:+.2f}\n\n"
+    r += f"PnL semaine: {ms['pnl']:+.2f}EUR\n"
     r += f"{len(wk_trades)} trades | {stats['winrate']:.0f}% reussite\n"
-    if best and best.get("pnl"): r += f"Meilleur: {best['symbol']} +${best['pnl']:.2f}\n"
-    if worst and worst.get("pnl"): r += f"Pire: {worst['symbol']} ${worst['pnl']:.2f}\n"
+    if best and best.get("pnl"): r += f"Meilleur: {best['symbol']} +{best['pnl']:.2f}EUR\n"
+    if worst and worst.get("pnl"): r += f"Pire: {worst['symbol']} {worst['pnl']:.2f}EUR\n"
     r += f"\nBonne semaine !"
     send_telegram(r)
 
 def send_monthly_report():
-    account  = get_account_info()
-    checkpts = get_equity_checkpoints()
-    month    = datetime.now().strftime("%Y-%m")
-    ms       = get_monthly_stats(month)
-    mo       = checkpts.get("month", account["equity"])
-    yr       = checkpts.get("year", account["equity"])
-    mo_pnl   = account["equity"] - mo
-    yr_pnl   = account["equity"] - yr
-    proj     = (yr_pnl/max(datetime.now().month,1))*12
-    total_m  = ms["wins"]+ms["losses"]
+    month  = datetime.now().strftime("%Y-%m")
+    ms     = get_monthly_stats(month)
+    total_m = ms["wins"] + ms["losses"]
     r  = f"<b>BILAN {datetime.now().strftime('%B %Y').upper()}</b>\n" + "="*22 + "\n\n"
-    r += f"<b>${account['equity']:.2f}</b> | Ce mois : ${mo_pnl:+.2f}\n\n"
-    r += f"Mois  : {progress_bar(max(mo_pnl,0), MONTHLY_GOAL_EUR*1.08)} ${mo_pnl:+.2f}\n"
-    r += f"Annee : {progress_bar(max(yr_pnl,0), yr*ANNUAL_GOAL_PCT/100)} ${yr_pnl:+.2f}\n\n"
+    r += f"PnL mois : {ms['pnl']:+.2f}EUR\n"
     r += f"{len(ms.get('trades',[]))} trades"
     if total_m > 0: r += f" | {ms['wins']/total_m*100:.0f}% reussite"
-    r += f"\nProjection annuelle : ~${proj:+.2f}\n"
+    r += "\n"
     send_telegram(r)
 
 def send_annual_report():
-    account  = get_account_info()
-    checkpts = get_equity_checkpoints()
-    year     = str(datetime.now().year)
-    ys       = get_annual_stats(year)
-    yr       = checkpts.get("year", account["equity"])
-    yr_pnl   = account["equity"] - yr
-    total_y  = ys["wins"]+ys["losses"]
-    proj_5y  = account["equity"]*((1+yr_pnl/max(yr,1))**5)
+    year = str(datetime.now().year)
+    ys   = get_annual_stats(year)
+    total_y = ys["wins"] + ys["losses"]
     r  = f"<b>BILAN ANNUEL {year}</b>\n" + "="*22 + "\n\n"
-    r += f"<b>${account['equity']:.2f}</b> | PnL : ${yr_pnl:+.2f}\n\n"
-    r += f"+{ANNUAL_GOAL_PCT}% :\n{progress_bar(max(yr_pnl,0), yr*ANNUAL_GOAL_PCT/100)} ${yr_pnl:+.2f}\n\n"
+    r += f"PnL annuel : {ys['pnl']:+.2f}EUR\n"
     r += f"{total_y} trades"
     if total_y > 0: r += f" | {ys['wins']/total_y*100:.0f}% reussite"
-    r += f"\nProjection 5 ans : ~${proj_5y:.2f}\n"
-    r += f"\nObjectif {int(year)+1} : +${max(yr_pnl*1.2,500):.0f}\nBonne annee !"
+    r += "\nBonne annee !"
     send_telegram(r)
 
-def send_premarket_briefing():
-    account  = get_account_info()
-    spy      = get_spy_perf()
-    checkpts = get_equity_checkpoints()
-    wk       = checkpts.get("week", account["equity"])
-    wk_pnl   = account["equity"] - wk
-    intl     = []
-    for ticker, name in [("EWJ","Japon"),("FXI","Chine"),("EWG","Allemagne"),("EWU","UK")]:
-        p = get_market_perf(ticker)
-        intl.append(f"{name} {p:+.2f}%")
-    r  = "<b>BRIEFING PRE-MARCHE</b>\n" + "="*22 + "\n\n"
-    r += f"${account['equity']:.2f} | Cash ${account['cash']:.2f}\n"
-    r += f"SPY hier : {spy:+.2f}%\n"
-    r += "  ".join(intl) + "\n\n"
-    r += f"Semaine : {progress_bar(max(wk_pnl,0), wk*WEEKLY_GOAL_PCT/100)} ${wk_pnl:+.2f}\n"
-    sentiment = "Favorable" if spy>0.5 else "Defavorable" if spy<-0.5 else "Neutre"
-    r += f"\nSentiment : {sentiment}\nC'est parti !"
+def send_morning_briefing():
+    btc_price = get_crypto_price("BTC-EUR") or 0
+    eth_price = get_crypto_price("ETH-EUR") or 0
+    cash_eur  = get_crypto_balance("EUR")
+    stats     = get_stats()
+    r  = "<b>BRIEFING CRYPTO</b>\n" + "="*22 + "\n\n"
+    r += f"BTC : {btc_price:.2f}EUR\n"
+    r += f"ETH : {eth_price:.2f}EUR\n"
+    r += f"Cash EUR : {cash_eur:.2f}EUR\n\n"
+    r += f"Trades actifs : {len(active_crypto_trades)}/{MAX_CRYPTO_POSITIONS}\n"
+    r += f"Reussite : {stats['winrate']:.0f}% | PnL net : {stats['total_pnl']:+.2f}EUR\n"
+    r += "C'est parti !"
     send_telegram(r)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -811,9 +479,8 @@ def cmd_aide():
         "<b>Commandes</b>\n\n"
         "/status | /positions | /hold\n"
         "/crypto | /report | /historique\n"
-        "/marche | /objectifs\n"
-        "/technique NVDA\n"
-        "/pourquoi AAPL\n\n"
+        "/objectifs\n"
+        "/pourquoi BTC-EUR\n\n"
         "/briefing | /semaine\n"
         "/mois | /annee\n\n"
         "/pause | /resume\n"
@@ -825,64 +492,51 @@ def cmd_aide():
 
 def cmd_pourquoi(symbol):
     symbol = symbol.upper()
-    trade  = active_stock_trades.get(symbol) or active_crypto_trades.get(symbol)
+    trade  = active_crypto_trades.get(symbol)
     if trade:
         send_telegram(f"<b>Raisonnement pour {symbol} :</b>\n\n{trade.get('reason', 'Raison non sauvegardee.')}")
     else:
         send_telegram(f"Aucun trade actif trouve pour {symbol}.")
 
 def cmd_status():
-    account   = get_account_info()
-    stats     = get_stats()
-    spy       = get_spy_perf()
-    checkpts  = get_equity_checkpoints()
-    ms        = get_monthly_stats()
-    ys        = get_annual_stats()
-    positions = get_positions()
-    hold_syms = set(load_memory().get("hold_portfolio",{}).keys())
-    hold_pos  = {s: d for s, d in positions.items() if s in hold_syms}
-    trade_pos = {s: d for s, d in positions.items() if s not in hold_syms}
-    wk        = checkpts.get("week", account["equity"])
-    wk_pnl    = account["equity"] - wk
-    btc_val   = get_crypto_balance("BTC") * (get_crypto_price("BTC-EUR") or 0)
-    eth_val   = get_crypto_balance("ETH") * (get_crypto_price("ETH-EUR") or 0)
+    stats    = get_stats()
+    ms       = get_monthly_stats()
+    ys       = get_annual_stats()
+    btc_val  = get_crypto_balance("BTC") * (get_crypto_price("BTC-EUR") or 0)
+    eth_val  = get_crypto_balance("ETH") * (get_crypto_price("ETH-EUR") or 0)
+    cash_eur = get_crypto_balance("EUR")
     send_telegram(
-        f"<b>Portefeuille</b>\n\n"
-        f"Actions : <b>${account['equity']:.2f}</b>\n"
-        f"Crypto hold : ~{btc_val+eth_val:.2f}EUR\n"
-        f"Cash Alpaca : ${account['cash']:.2f}\n"
-        f"Cash Crypto : {get_crypto_balance('EUR'):.2f}EUR\n"
-        f"Aujourd'hui : ${account['pnl']:+.2f}\n\n"
-        f"Hold : {len(hold_pos)} pos | Trade : {len(trade_pos)} pos\n\n"
-        f"Mois : ${ms['pnl']:+.2f} | Annee : ${ys['pnl']:+.2f}\n\n"
-        f"Semaine :\n{progress_bar(max(wk_pnl,0), wk*WEEKLY_GOAL_PCT/100)} ${wk_pnl:+.2f}\n\n"
-        f"Reussite : {stats['winrate']:.0f}% | SPY : {spy:+.2f}%\n"
-        f"Bot: {'vacances' if vacation_mode else 'pause' if trading_paused else 'actif'} | Marche: {'ouvert' if is_market_open() else 'ferme'}"
+        f"<b>Portefeuille Crypto</b>\n\n"
+        f"BTC hold : ~{btc_val:.2f}EUR\n"
+        f"ETH hold : ~{eth_val:.2f}EUR\n"
+        f"Cash EUR  : {cash_eur:.2f}EUR\n\n"
+        f"Day Trades : {len(active_crypto_trades)}/{MAX_CRYPTO_POSITIONS}\n\n"
+        f"Mois : {ms['pnl']:+.2f}EUR | Annee : {ys['pnl']:+.2f}EUR\n"
+        f"Reussite : {stats['winrate']:.0f}%\n"
+        f"Bot: {'vacances' if vacation_mode else 'pause' if trading_paused else 'actif'}"
     )
 
 def cmd_hold():
-    memory    = load_memory()
-    hold_port = memory.get("hold_portfolio",{})
-    positions = get_positions()
-    if not hold_port:
-        send_telegram("Poche hold vide - Claude cherche des opportunites."); return
-    msg = "<b>Poche HOLD</b>\n\n"
-    for s, info in hold_port.items():
-        pos = positions.get(s,{})
-        pnl = f" ({pos['pnl_pct']:+.2f}%)" if pos else ""
-        msg += f"<b>{s}</b> [{info.get('horizon','?')}] depuis {info.get('date','?')}{pnl}\n"
-    send_telegram(msg)
+    lines = []
+    for symbol in CRYPTO_HOLD_STRICT:
+        currency = symbol.replace("-EUR","")
+        balance  = get_crypto_balance(currency)
+        price    = get_crypto_price(symbol) or 0
+        val      = balance * price
+        lines.append(f"<b>{currency}</b> {balance:.6f} = {val:.2f}EUR (HOLD strict)")
+    if not lines:
+        send_telegram("Poche hold crypto vide."); return
+    send_telegram("<b>Poche Hold Crypto</b>\n\n" + "\n".join(lines))
 
 def cmd_positions():
-    positions = get_positions()
-    hold_syms = set(load_memory().get("hold_portfolio",{}).keys())
-    trade_pos = {s: d for s, d in positions.items() if s not in hold_syms}
-    if not trade_pos:
-        send_telegram("Aucun trade actions actif."); return
+    if not active_crypto_trades:
+        send_telegram("Aucun day trade crypto actif."); return
     msg = "<b>Day Trades actifs</b>\n\n"
-    for s, d in trade_pos.items():
-        t = active_stock_trades.get(s,{})
-        msg += f"<b>{s}</b> ${d['value']:.2f} ({d['pnl_pct']:+.2f}%) TP:+{t.get('tp_pct',STOCK_TP_PCT)}%\n"
+    for s, t in active_crypto_trades.items():
+        entry = t.get("entry") or 0
+        price = get_crypto_price(s) or entry
+        pnl_pct = ((price - entry) / entry * 100 - COINBASE_FEE_PCT) if entry else 0
+        msg += f"<b>{s}</b> {t['amount']:.2f}EUR ({pnl_pct:+.1f}% net) TP:+{t.get('tp_pct', CRYPTO_TP_PCT)}%\n"
     send_telegram(msg)
 
 def cmd_crypto():
@@ -906,41 +560,17 @@ def cmd_crypto():
         f"Day trade actif : {len(active_crypto_trades)}/{MAX_CRYPTO_POSITIONS} pos"
     )
 
-def cmd_marche():
-    spy  = get_spy_perf()
-    intl = []
-    for ticker, name in [("EWJ","Japon"),("FXI","Chine"),("EWG","Allemagne"),("EWU","UK")]:
-        p = get_market_perf(ticker)
-        intl.append(f"{name} : {p:+.2f}%")
-    msg  = f"<b>Marches</b>\n\nSPY : {spy:+.2f}%\n\n"
-    msg += "\n".join(intl)
-    msg += f"\n\n{'Ouvert' if is_market_open() else 'Ferme'}"
-    send_telegram(msg)
-
-def cmd_technique(ticker):
-    ta    = get_ta(ticker)
-    price = get_price(ticker)
-    if not ta or not price:
-        send_telegram(f"Impossible d'analyser {ticker}."); return
-    wr  = get_winrate(ticker)
-    msg = f"<b>{ticker}</b> ${price:.2f}\n\n{format_ta(ta)}"
-    if wr: msg += f"Reussite : {wr:.0f}%"
-    send_telegram(msg)
-
 def cmd_objectifs():
-    account  = get_account_info()
-    checkpts = get_equity_checkpoints()
-    wk     = checkpts.get("week", account["equity"])
-    mo     = checkpts.get("month", account["equity"])
-    yr     = checkpts.get("year", account["equity"])
-    wk_pnl = account["equity"] - wk
-    mo_pnl = account["equity"] - mo
-    yr_pnl = account["equity"] - yr
+    stats = get_stats()
+    ms    = get_monthly_stats()
+    ys    = get_annual_stats()
     send_telegram(
         f"<b>Objectifs</b>\n\n"
-        f"Semaine (+{WEEKLY_GOAL_PCT}%) :\n{progress_bar(max(wk_pnl,0), wk*WEEKLY_GOAL_PCT/100)}\n${wk_pnl:+.2f}\n\n"
-        f"Mois (+{MONTHLY_GOAL_EUR}EUR) :\n{progress_bar(max(mo_pnl,0), MONTHLY_GOAL_EUR*1.08)}\n${mo_pnl:+.2f}\n\n"
-        f"Annee (+{ANNUAL_GOAL_PCT}%) :\n{progress_bar(max(yr_pnl,0), yr*ANNUAL_GOAL_PCT/100)}\n${yr_pnl:+.2f}"
+        f"Objectif mensuel : +{MONTHLY_GOAL_EUR}EUR\n"
+        f"Ce mois : {ms['pnl']:+.2f}EUR\n\n"
+        f"Objectif annuel : +{ANNUAL_GOAL_PCT}%\n"
+        f"Cette annee : {ys['pnl']:+.2f}EUR\n\n"
+        f"Reussite total : {stats['winrate']:.0f}% | PnL net : {stats['total_pnl']:+.2f}EUR"
     )
 
 def cmd_historique():
@@ -967,14 +597,16 @@ def cmd_resume():
 def cmd_urgence():
     global trading_paused
     trading_paused = True
-    positions = get_positions()
-    hold_syms = set(load_memory().get("hold_portfolio",{}).keys())
-    trade_pos = {s: d for s, d in positions.items() if s not in hold_syms}
-    if not trade_pos:
-        send_telegram("Aucun trade actif.\nPoche hold conservee."); return
-    send_telegram(f"<b>URGENCE</b>\nFermeture de {len(trade_pos)} trade(s)...\nPoche hold conservee.")
-    for s, d in trade_pos.items():
-        place_order(s, "sell", abs(d["qty"]), label="URGENCE")
+    if not active_crypto_trades:
+        send_telegram("Aucun trade actif."); return
+    send_telegram(f"<b>URGENCE</b>\nFermeture de {len(active_crypto_trades)} trade(s) crypto...")
+    for symbol, trade in list(active_crypto_trades.items()):
+        if symbol in CRYPTO_HOLD_STRICT: continue
+        currency = symbol.replace("-EUR","")
+        balance  = get_crypto_balance(currency)
+        price    = get_crypto_price(symbol) or 0
+        if balance > 0 and price > 0:
+            place_crypto_order(symbol, "sell", balance*price, label="URGENCE")
     send_telegram("Trades fermes.\nTape /resume.")
 
 def cmd_vacances():
@@ -1001,7 +633,7 @@ def cmd_voir_alertes():
         send_telegram("Aucune alerte."); return
     msg = "<b>Alertes actives</b>\n\n"
     for s, t in custom_alerts.items():
-        p    = get_crypto_price(s) if "-EUR" in s else get_price(s)
+        p    = get_crypto_price(s)
         diff = f" ({abs((p-t)/t*100):.1f}% restant)" if p else ""
         msg += f"<b>{s}</b> -> {t:.2f}{diff}\n"
     send_telegram(msg)
@@ -1029,9 +661,8 @@ def handle_telegram():
                 elif cmd == "/crypto":                  cmd_crypto()
                 elif cmd == "/report":                  send_daily_report(immediate=True)
                 elif cmd == "/historique":              cmd_historique()
-                elif cmd == "/marche":                  cmd_marche()
                 elif cmd == "/objectifs":               cmd_objectifs()
-                elif cmd == "/briefing":                send_premarket_briefing()
+                elif cmd == "/briefing":                send_morning_briefing()
                 elif cmd == "/semaine":                 send_weekly_report()
                 elif cmd == "/mois":                    send_monthly_report()
                 elif cmd == "/annee":                   send_annual_report()
@@ -1041,7 +672,6 @@ def handle_telegram():
                 elif cmd == "/vacances":                cmd_vacances()
                 elif cmd == "/retour":                  cmd_retour()
                 elif cmd == "/alertes":                 cmd_voir_alertes()
-                elif cmd == "/technique" and args:      cmd_technique(args[0].upper())
                 elif cmd == "/pourquoi" and args:       cmd_pourquoi(args[0].upper())
                 elif cmd == "/alerte" and len(args)>=2: cmd_alerte(args)
         except Exception:
@@ -1069,16 +699,6 @@ def thread_crypto():
             record_error(f"thread_crypto: {e}")
         time.sleep(INTERVAL_CRYPTO)
 
-def thread_stocks():
-    while True:
-        try:
-            if not trading_paused and not vacation_mode and is_market_open():
-                manage_hold_portfolio()
-                scan_stocks()
-        except Exception as e:
-            record_error(f"thread_stocks: {e}")
-        time.sleep(INTERVAL_STOCKS)
-
 def thread_risk():
     while True:
         try:
@@ -1091,13 +711,10 @@ def thread_scheduler():
     briefing_sent = daily_sent = weekly_sent = monthly_sent = annual_sent = None
     while True:
         try:
-            now     = datetime.now()
-            today   = now.strftime("%Y-%m-%d")
-            account = get_account_info()
-            update_equity_checkpoints(account["equity"])
-            check_market_health()
-            if now.hour == 15 and now.minute == 25 and briefing_sent != today:
-                send_premarket_briefing(); briefing_sent = today
+            now   = datetime.now()
+            today = now.strftime("%Y-%m-%d")
+            if now.hour == 8 and now.minute < 5 and briefing_sent != today:
+                send_morning_briefing(); briefing_sent = today
             if now.hour == 21 and now.minute < 5 and daily_sent != today:
                 send_daily_report(); daily_sent = today
             wk = now.strftime("%Y-%W")
@@ -1134,32 +751,24 @@ def start_health_server():
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def main():
     send_telegram(
-        "<b>Trading Agent V4 (DOUBLE FOCALE)</b>\n\n"
-        "ALPACA (ACTIONS)\n"
-        "Hold : Macro et 1 Jour\n"
-        "Day Trade : 1 Heure (Actif)\n\n"
+        "<b>Trading Agent Crypto (Coinbase)</b>\n\n"
         "COINBASE (CRYPTO)\n"
         "Day Trade : 1 Heure (Hyperactif)\n"
         "Les frais Coinbase (~1.2%) sont deduits des PnL.\n\n"
         "Tape /aide"
     )
-    account = get_account_info()
-    update_equity_checkpoints(account["equity"])
-    log(f"Capital : ${account['equity']:.2f} | Cash : ${account['cash']:.2f}")
-
     threading.Thread(target=start_health_server, daemon=True).start()
     threading.Thread(target=handle_telegram,     daemon=True).start()
     threading.Thread(target=thread_crypto,       daemon=True).start()
-    threading.Thread(target=thread_stocks,       daemon=True).start()
     threading.Thread(target=thread_risk,         daemon=True).start()
     threading.Thread(target=thread_scheduler,    daemon=True).start()
     threading.Thread(target=thread_news_watcher, daemon=True).start()
 
-    log("Tous les threads demarres en mode V4 (Double Focale).")
+    log("Tous les threads demarres.")
 
     while True:
         time.sleep(60)
-        log(f"Alive | {'OUVERT' if is_market_open() else 'ferme'} | {'PAUSE' if trading_paused else 'ACTIF'}")
+        log(f"Alive | {'PAUSE' if trading_paused else 'ACTIF'} | Trades: {len(active_crypto_trades)}")
 
 if __name__ == "__main__":
     main()
