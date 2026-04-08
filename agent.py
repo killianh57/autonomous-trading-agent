@@ -29,11 +29,12 @@ CRYPTO_HOLD_ALLOC  = {
     "BTC-EUR": 0.25, "ETH-EUR": 0.15,
     "SOL-EUR": 0.05, "XRP-EUR": 0.03, "LINK-EUR": 0.02,
 }
-MAX_CRYPTO_POSITIONS          = 6
-CRYPTO_SL_PCT                 = 4.0
-CRYPTO_TP_PCT                 = 6.0
-TRAILING_STOP_PCT             = 2.5
-CRYPTO_RISK_PER_TRADE         = 0.12
+MAX_CRYPTO_POSITIONS          = 8
+CRYPTO_SL_PCT                 = 1.0
+CRYPTO_TP_PCT                 = 1.5
+TRAILING_STOP_PCT             = 0.5
+CRYPTO_RISK_PER_TRADE         = 0.15
+PYRAMID_MAX                   = 0
 CRYPTO_MIN_CONFIDENCE         = 65
 COINBASE_FEE_PCT              = 1.2
 CRYPTO_CANDLE_WINDOW_HOURS    = 48
@@ -54,7 +55,7 @@ ANNUAL_GOAL_PCT  = 20.0
 DCA_MONTHLY_EUR  = 100
 MEMORY_FILE      = "trade_memory.json"
 
-INTERVAL_CRYPTO    = 60
+INTERVAL_CRYPTO    = 20
 INTERVAL_STOCKS    = 300
 INTERVAL_RISK      = 30
 INTERVAL_SCHEDULER = 60
@@ -247,7 +248,7 @@ def get_crypto_balance(currency):
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # ANALYSE TECHNIQUE
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-def calculate_rsi(prices, period=14):
+def calculate_rsi(prices, period=7):
     if len(prices) < period+1: return None
     gains  = [max(prices[i]-prices[i-1],0) for i in range(1,len(prices))]
     losses = [max(prices[i-1]-prices[i],0) for i in range(1,len(prices))]
@@ -265,12 +266,12 @@ def get_crypto_ta(symbol):
             product_id=symbol,
             start=str(start_ts),
             end=str(end_ts),
-            granularity="FIFTEEN_MINUTE"
+            granularity="FIVE_MINUTE"
         )
         prices = [float(c["close"]) for c in candles.get("candles",[])]
         prices = prices[::-1]  # remettre en ordre chronologique (Coinbase renvoie décroissant)
         if len(prices) < 14: return None
-        rsi  = calculate_rsi(prices)
+        rsi  = calculate_rsi(prices, period=7)
         ma20 = sum(prices[-20:])/20 if len(prices) >= 20 else None
         cur  = prices[-1]
         return {"rsi": rsi, "ma20": ma20, "current": cur,
@@ -281,7 +282,7 @@ def get_crypto_ta(symbol):
     except:
         return None
 
-def detect_breakout_setup(prices, threshold=0.02):
+def detect_breakout_setup(prices, threshold=0.03):
     """Détecte si le prix approche ou franchit un niveau de résistance récent.
     EARLY: prix dans les `threshold*100`% sous le plus haut des 20 dernières bougies."""
     if not prices or len(prices) < 20:
@@ -379,7 +380,7 @@ def scan_crypto():
         price = get_crypto_price(symbol)
         ta    = get_crypto_ta(symbol)
         if not price or not ta or not ta.get("rsi"): continue
-        if ta.get("week_perf") is None or abs(ta["week_perf"]) < 0.3: continue
+        if ta.get("week_perf") is None or abs(ta["week_perf"]) < 0.1: continue
         rsi        = ta["rsi"]
         trend      = ta["trend"]
         above_ma20 = ta.get("above_ma20")
@@ -814,7 +815,7 @@ def main():
     threading.Thread(target=thread_scheduler,    daemon=True).start()
     threading.Thread(target=thread_news_watcher, daemon=True).start()
 
-    log("Tous les threads demarres.")
+    log("🚀 BOT V7 SCALPING LANCÉ - Mode scalping ultra-rapide activé")
 
     while True:
         time.sleep(60)
