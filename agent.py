@@ -13,7 +13,6 @@ from alpaca.trading.enums import OrderSide, TimeInForce
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
-import datetime as dt
 
 load_dotenv()
 
@@ -305,8 +304,8 @@ def get_alpaca_price(symbol):
 def get_alpaca_ta(symbol):
     try:
         if not alpaca_data_client: return None
-        end = dt.datetime.utcnow()
-        start = end - dt.timedelta(hours=9)
+        end = datetime.utcnow()
+        start = end - timedelta(hours=9)
         req = StockBarsRequest(symbol_or_symbols=symbol, timeframe=TimeFrame(5, TimeFrameUnit.Minute), start=start, end=end, limit=100)
         bars = alpaca_data_client.get_stock_bars(req)
         df = bars.df
