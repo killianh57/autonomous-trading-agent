@@ -72,15 +72,13 @@ CRYPTO_HOLD_ALLOC  = {
     "LINK-EUR": 0.02,
 }
 
-# Parametres scalping corriges pour couvrir les frais Coinbase
 COINBASE_FEE_PCT              = 1.2   # frais aller-retour
-CRYPTO_SL_PCT                 = 2.5   # stop loss net (etait 1% -> trop serre)
+CRYPTO_SL_PCT                 = 2.5   # stop loss net
 CRYPTO_TP_PCT                 = 4.0   # take profit net rentable apres frais
-TRAILING_STOP_PCT             = 1.0   # trailing stop depuis le pic
+TRAILING_STOP_PCT             = 3.0   # trailing stop depuis le pic (elargi pour eviter micro-ventes)
 CRYPTO_RISK_PER_TRADE         = 0.15  # 15% du cash dispo par trade
 MAX_CRYPTO_POSITIONS          = 8
 CRYPTO_MIN_CONFIDENCE         = 65
-CRYPTO_CIRCUIT_BREAKER_LOSSES = 3     # pause apres N pertes consecutives
 CRYPTO_CANDLE_WINDOW_HOURS    = 24    # fenetre bougies 5min
 
 CRYPTO_UNIVERSE_RAW = [
@@ -142,7 +140,6 @@ vacation_mode        = False
 custom_alerts        = {}
 active_stock_trades  = {}
 active_crypto_trades = {}
-loss_streak          = 0
 _lock                = threading.RLock()
 
 # ==================================================
@@ -643,7 +640,6 @@ def open_short(symbol, qty, tp_pct=None):
 # ORDRES - COINBASE (EUR)
 # ==================================================
 def place_crypto_order(symbol, side, amount_eur, tp_pct=None, label="", reason=""):
-    global loss_streak
     try:
         if not coinbase:
             return
@@ -682,13 +678,6 @@ def place_crypto_order(symbol, side, amount_eur, tp_pct=None, label="", reason="
                     "SL: -" + str(CRYPTO_SL_PCT) + "% | TP: +" + str(tp) + "% (nets frais)"
                 )
             else:
-                entry_price = active_crypto_trades.get(symbol, {}).get("entry")
-                if entry_price and price:
-                    net_pnl = ((price - entry_price) / entry_price * 100) - COINBASE_FEE_PCT
-                    if net_pnl < 0:
-                        loss_streak += 1
-                    else:
-                        loss_streak = 0
                 active_crypto_trades.pop(symbol, None)
                 send_telegram(
                     "<b>Vente " + label + "</b> <b>" + symbol + "</b> ~"
@@ -854,17 +843,68 @@ def scan_stocks():
             break
         time.sleep(0.5)
 
+
+# ==================================================
+# GESTION DU DRAWDOWN DYNAMIQUE (DISJONCTEUR)
+# ==================================================
+def get_crypto_capital():
+    # Calcule tout l'argent sur Coinbase (Cash + Cryptos)
+    total = get_crypto_balance("EUR")
+    for symbol in set(CRYPTO_UNIVERSE + CRYPTO_HOLD_ALL):
+        currency = symbol.replace("-EUR", "")
+        bal = get_crypto_balance(currency)
+        if bal > 0:
+            price = get_crypto_price(symbol)
+            if price:
+                total += bal * price
+    return total
+
+def check_circuit_breaker():
+    current_capital = get_crypto_capital()
+    if current_capital <= 0:
+        return False
+        
+    memory = load_memory()
+    peak = memory.get("crypto_peak", current_capital)
+    
+    # Si on est plus riche qu'avant, on enregistre le nouveau record !
+    if current_capital > peak:
+        memory["crypto_peak"] = current_capital
+        save_memory(memory)
+        return False
+        
+    # Calcul de la chute en pourcentage
+    drawdown_pct = ((peak - current_capital) / peak) * 100
+    
+    # Paliers de chute acceptables selon le capital
+    if peak < 100:
+        max_drop = 50.0   # -50% autorisé si < 100€
+    elif peak < 1000:
+        max_drop = 30.0   # -30% autorisé si < 1000€
+    elif peak < 5000:
+        max_drop = 20.0   # -20% autorisé si < 5000€
+    else:
+        max_drop = 15.0   # -15% autorisé au-delà
+        
+    if drawdown_pct >= max_drop:
+        return True
+    return False
+
 # ==================================================
 # DAY TRADING - CRYPTO SCALPING 24/7
 # ==================================================
 def scan_crypto():
     if trading_paused or vacation_mode or not coinbase:
         return
-    if loss_streak >= CRYPTO_CIRCUIT_BREAKER_LOSSES:
-        log("Circuit breaker: " + str(loss_streak) + " pertes consecutives, scan suspendu")
+        
+    # NOUVEAU DISJONCTEUR INTELLIGENT
+    if check_circuit_breaker():
+        log("Circuit breaker: Chute du capital max atteinte, pause.")
         return
+
     if len(active_crypto_trades) >= MAX_CRYPTO_POSITIONS:
         return
+    
     cash_eur = get_crypto_balance("EUR")
     if cash_eur < 5:
         return
@@ -933,17 +973,24 @@ def check_crypto_risk():
     for symbol, trade in list(active_crypto_trades.items()):
         if symbol in CRYPTO_HOLD_STRICT:
             continue
+            
+        currency      = symbol.replace("-EUR", "")
+        balance       = get_crypto_balance(currency)
+        
+        # Auto-nettoyage de la mémoire si la crypto a été vendue manuellement ou est vide
+        if balance <= 0:
+            with _lock:
+                active_crypto_trades.pop(symbol, None)
+            continue
+            
         price = get_crypto_price(symbol)
         if not price:
             continue
+            
         entry         = trade.get("entry", price)
         tp_pct        = trade.get("tp_pct", CRYPTO_TP_PCT)
         gross_pnl_pct = ((price - entry) / entry * 100) if entry else 0
         net_pnl_pct   = gross_pnl_pct - COINBASE_FEE_PCT
-        currency      = symbol.replace("-EUR", "")
-        balance       = get_crypto_balance(currency)
-        if balance <= 0:
-            continue
 
         with _lock:
             current_peak = trade.get("peak", entry)
@@ -1366,11 +1413,16 @@ def cmd_pause():
     send_telegram("<b>Pause</b>\nStop loss actif. Tape /resume.")
 
 def cmd_resume():
-    global trading_paused, vacation_mode, loss_streak
+    global trading_paused, vacation_mode
     trading_paused = False
     vacation_mode  = False
-    loss_streak    = 0
-    send_telegram("<b>Trading repris !</b>")
+    
+    # On réinitialise le record de capital pour débloquer le disjoncteur
+    memory = load_memory()
+    memory["crypto_peak"] = get_crypto_capital()
+    save_memory(memory)
+    
+    send_telegram("<b>Trading repris !</b>\nDisjoncteur réinitialisé.")
 
 def cmd_urgence():
     global trading_paused
@@ -1638,7 +1690,7 @@ def main():
         "Max " + str(MAX_CRYPTO_POSITIONS) + " pos simultanees\n\n"
         "SL : -" + str(CRYPTO_SL_PCT) + "% crypto (net frais) | -" + str(STOCK_SL_PCT) + "% actions\n"
         "Trailing stop : -" + str(TRAILING_STOP_PCT) + "% depuis pic\n"
-        "Circuit breaker : " + str(CRYPTO_CIRCUIT_BREAKER_LOSSES) + " pertes de suite\n\n"
+        "Disjoncteur actif : Drawdown dynamique par capital\n\n"
         "Tape /aide"
     )
 
@@ -1663,8 +1715,7 @@ def main():
             "Alive | " + ("PAUSE" if trading_paused else "ACTIF") +
             " | Marche " + ("OUVERT" if is_market_open() else "ferme") +
             " | Actions: " + str(len(active_stock_trades)) +
-            " | Crypto: " + str(len(active_crypto_trades)) +
-            " | Streak: " + str(loss_streak)
+            " | Crypto: " + str(len(active_crypto_trades))
         )
 
 
