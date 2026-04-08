@@ -37,7 +37,7 @@ CRYPTO_RISK_PER_TRADE         = 0.15
 PYRAMID_MAX                   = 0
 CRYPTO_MIN_CONFIDENCE         = 65
 COINBASE_FEE_PCT              = 1.2
-CRYPTO_CANDLE_WINDOW_HOURS    = 48
+CRYPTO_CANDLE_WINDOW_HOURS    = 24
 CRYPTO_CIRCUIT_BREAKER_LOSSES = 3
 CRYPTO_TRADE_ALLOC_PCT        = 0.20
 
@@ -434,6 +434,29 @@ def check_custom_alerts():
             send_telegram(f"<b>ALERTE !</b> <b>{symbol}</b> atteint {price:.2f}")
             del custom_alerts[symbol]
 
+def check_existing_holdings():
+    """Detecte les cryptos deja detenues sur Coinbase et les ajoute au suivi TP/SL."""
+    if not coinbase: return
+    for symbol in CRYPTO_UNIVERSE:
+        if symbol in CRYPTO_HOLD_STRICT: continue
+        if symbol in active_crypto_trades: continue
+        currency = symbol.replace("-EUR", "")
+        balance  = get_crypto_balance(currency)
+        if balance <= 0: continue
+        price = get_crypto_price(symbol)
+        if not price: continue
+        valeur = balance * price
+        if valeur < 1.0: continue
+        with _lock:
+            active_crypto_trades[symbol] = {
+                "side": "long", "amount": valeur, "entry": price,
+                "peak": price, "tp_pct": CRYPTO_TP_PCT,
+                "reason": "Position existante detectee",
+                "entry_time": datetime.utcnow().isoformat()
+            }
+        log(f"Position existante detectee : {symbol} {balance:.6f} = {valeur:.2f}EUR")
+        send_telegram(f"<b>Position detectee</b> <b>{symbol}</b>\n{balance:.6f} = ~{valeur:.2f}EUR\nAjoutee au suivi TP/SL du bot")
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # DCA MENSUEL
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -538,6 +561,7 @@ def cmd_aide():
         "/vacances | /retour\n\n"
         "/alerte BTC-EUR 90000\n"
         "/alertes\n\n"
+        "/scan_holdings - Detecte les fonds existants\n\n"
         "/urgence - Ferme les trades"
     )
 
@@ -723,6 +747,7 @@ def handle_telegram():
                 elif cmd == "/vacances":                cmd_vacances()
                 elif cmd == "/retour":                  cmd_retour()
                 elif cmd == "/alertes":                 cmd_voir_alertes()
+                elif cmd == "/scan_holdings":           check_existing_holdings(); send_telegram("Scan termine.")
                 elif cmd == "/pourquoi" and args:       cmd_pourquoi(args[0].upper())
                 elif cmd == "/alerte" and len(args)>=2: cmd_alerte(args)
         except Exception:
@@ -744,6 +769,7 @@ def thread_news_watcher():
 def thread_crypto():
     while True:
         try:
+            check_existing_holdings()
             check_crypto_risk()
             if not trading_paused and not vacation_mode: scan_crypto()
         except Exception as e:
@@ -808,6 +834,7 @@ def main():
         "Les frais Coinbase (~1.2%) sont deduits des PnL.\n\n"
         "Tape /aide"
     )
+    check_existing_holdings()
     threading.Thread(target=start_health_server, daemon=True).start()
     threading.Thread(target=handle_telegram,     daemon=True).start()
     threading.Thread(target=thread_crypto,       daemon=True).start()
