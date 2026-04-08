@@ -7,6 +7,13 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from coinbase.rest import RESTClient
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
+from alpaca.trading.client import TradingClient
+from alpaca.trading.requests import MarketOrderRequest
+from alpaca.trading.enums import OrderSide, TimeInForce
+from alpaca.data.historical import StockHistoricalDataClient
+from alpaca.data.requests import StockBarsRequest
+from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
+import datetime as dt
 
 load_dotenv()
 
@@ -18,6 +25,25 @@ TELEGRAM_TOKEN    = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID  = os.getenv("TELEGRAM_CHAT_ID")
 COINBASE_API_KEY  = os.getenv("COINBASE_API_KEY")
 COINBASE_SECRET   = os.getenv("COINBASE_SECRET_KEY")
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# CONFIGURATION ALPACA
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ALPACA_API_KEY = os.getenv("ALPACA_API_KEY")
+ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY")
+ALPACA_PAPER = os.getenv("ALPACA_PAPER", "true").lower() == "true"
+
+ALPACA_HOLD_ALLOC_PCT = 0.60
+ALPACA_HOLD_MAX_POSITIONS = 10
+ALPACA_HOLD_REBALANCE_DAYS = 7
+ALPACA_DT_ALLOC_PCT = 0.40
+ALPACA_DT_MAX_POSITIONS = 4
+ALPACA_DT_TP_PCT = 1.5
+ALPACA_DT_SL_PCT = 1.0
+ALPACA_DT_TRAILING_PCT = 0.5
+
+ALPACA_HOLD_UNIVERSE = ["SPY","QQQ","AAPL","MSFT","NVDA","GOOGL","AMZN","META","TSLA","JPM","JNJ","UNH","V","MA","HD","PG","KO","PEP","WMT","VTI","VEA","VWO","GLD","TLT","IEF","LQD","XLK","XLF","XLE","ARKK"]
+ALPACA_DT_UNIVERSE = ["AAPL","MSFT","NVDA","TSLA","AMD","META","GOOGL","AMZN","SPY","QQQ","NFLX","SHOP","COIN","PLTR","SOFI","RIVN","LCID","NIO","ARKK","SQQQ"]
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # PARAMETRES COINBASE (DAY TRADING ACTIF)
@@ -55,9 +81,9 @@ ANNUAL_GOAL_PCT  = 20.0
 DCA_MONTHLY_EUR  = 100
 MEMORY_FILE      = "trade_memory.json"
 
-INTERVAL_CRYPTO    = 20
+INTERVAL_CRYPTO    = 15
 INTERVAL_STOCKS    = 300
-INTERVAL_RISK      = 30
+INTERVAL_RISK      = 5
 INTERVAL_SCHEDULER = 60
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -69,6 +95,14 @@ except Exception as e:
     coinbase = None
     print(f"Coinbase init error: {e}")
 
+try:
+    alpaca_client = TradingClient(ALPACA_API_KEY, ALPACA_SECRET_KEY, paper=ALPACA_PAPER)
+    alpaca_data_client = StockHistoricalDataClient(ALPACA_API_KEY, ALPACA_SECRET_KEY)
+except Exception as e:
+    alpaca_client = None
+    alpaca_data_client = None
+    print(f"Alpaca init error: {e}")
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # ETAT GLOBAL
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -78,6 +112,10 @@ custom_alerts        = {}
 active_crypto_trades = {}
 _lock                = threading.RLock()
 loss_streak          = 0
+
+alpaca_hold_trades = {}
+alpaca_dt_trades = {}
+alpaca_last_rebalance = None
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # UTILITAIRES
@@ -244,6 +282,237 @@ def get_crypto_balance(currency):
     except:
         return 0
 
+
+def get_alpaca_account():
+    try:
+        if not alpaca_client: return None
+        return alpaca_client.get_account()
+    except Exception as e:
+        log(f"Alpaca account error: {e}")
+        return None
+
+def get_alpaca_price(symbol):
+    try:
+        if not alpaca_data_client: return None
+        req = StockBarsRequest(symbol_or_symbols=symbol, timeframe=TimeFrame.Minute, limit=1)
+        bars = alpaca_data_client.get_stock_bars(req)
+        df = bars.df
+        if df.empty: return None
+        return float(df["close"].iloc[-1])
+    except Exception as e:
+        return None
+
+def get_alpaca_ta(symbol):
+    try:
+        if not alpaca_data_client: return None
+        end = dt.datetime.utcnow()
+        start = end - dt.timedelta(hours=9)
+        req = StockBarsRequest(symbol_or_symbols=symbol, timeframe=TimeFrame(5, TimeFrameUnit.Minute), start=start, end=end, limit=100)
+        bars = alpaca_data_client.get_stock_bars(req)
+        df = bars.df
+        if df.empty or len(df) < 14: return None
+        prices = list(df["close"])
+        rsi = calculate_rsi(prices, period=7)
+        ma20 = sum(prices[-20:]) / 20 if len(prices) >= 20 else None
+        cur = prices[-1]
+        week_perf = ((cur - prices[-7]) / prices[-7] * 100) if len(prices) >= 7 else None
+        return {"rsi": rsi, "ma20": ma20, "current": cur,
+                "trend": "haussier" if (ma20 and cur > ma20) else "baissier",
+                "above_ma20": cur > ma20 if ma20 else None,
+                "week_perf": week_perf, "prices": prices}
+    except Exception as e:
+        return None
+
+def get_alpaca_position(symbol):
+    try:
+        if not alpaca_client: return None
+        return alpaca_client.get_open_position(symbol)
+    except:
+        return None
+
+def place_alpaca_order(symbol, side, notional_usd, label="", reason="", short=False):
+    try:
+        if not alpaca_client: return
+        if side == "buy":
+            req = MarketOrderRequest(symbol=symbol, notional=round(notional_usd, 2), side=OrderSide.BUY, time_in_force=TimeInForce.DAY)
+            alpaca_client.submit_order(req)
+            price = get_alpaca_price(symbol)
+            with _lock:
+                alpaca_dt_trades[symbol] = {"side": "long" if not short else "short", "amount": notional_usd, "entry": price, "peak": price, "tp_pct": ALPACA_DT_TP_PCT, "reason": reason, "short": short, "entry_time": datetime.utcnow().isoformat()}
+            send_telegram(f"<b>{'SHORT' if short else 'LONG'} {label}</b> <b>{symbol}</b>\n~${notional_usd:.2f}\nSL: -{ALPACA_DT_SL_PCT}% | TP: +{ALPACA_DT_TP_PCT}%")
+        else:
+            pos = get_alpaca_position(symbol)
+            if pos:
+                qty = abs(float(pos.qty))
+                sell_side = OrderSide.SELL if not short else OrderSide.BUY
+                req = MarketOrderRequest(symbol=symbol, qty=qty, side=sell_side, time_in_force=TimeInForce.DAY)
+                alpaca_client.submit_order(req)
+            entry_info = alpaca_dt_trades.get(symbol, {})
+            price = get_alpaca_price(symbol)
+            entry_price = entry_info.get("entry")
+            if entry_price and price:
+                if not short:
+                    net_pnl_pct = (price - entry_price) / entry_price * 100
+                else:
+                    net_pnl_pct = (entry_price - price) / entry_price * 100
+                record_trade(symbol, "sell", 0, price or 0, net_pnl_pct * notional_usd / 100)
+            with _lock:
+                alpaca_dt_trades.pop(symbol, None)
+            send_telegram(f"<b>Vente {label}</b> <b>{symbol}</b> ~${notional_usd:.2f}")
+    except Exception as e:
+        record_error(f"Alpaca order {symbol}: {e}")
+        send_telegram(f"<b>Ordre Alpaca echoue</b> {symbol}\n{str(e)[:100]}")
+
+def scan_alpaca_hold():
+    global alpaca_last_rebalance
+    if not alpaca_client or not alpaca_data_client: return
+    if alpaca_last_rebalance is not None:
+        days_since = (datetime.utcnow() - alpaca_last_rebalance).days
+        if days_since < ALPACA_HOLD_REBALANCE_DAYS: return
+    try:
+        account = get_alpaca_account()
+        if not account: return
+        equity = float(account.equity)
+        hold_capital = equity * ALPACA_HOLD_ALLOC_PCT
+        scores = {}
+        for symbol in ALPACA_HOLD_UNIVERSE:
+            ta = get_alpaca_ta(symbol)
+            if not ta: continue
+            score = 0
+            if ta.get("rsi") and ta["rsi"] < 40: score += 2
+            if ta.get("trend") == "haussier": score += 1
+            if ta.get("above_ma20"): score += 1
+            if ta.get("week_perf") and ta["week_perf"] > 2: score += 1
+            scores[symbol] = score
+            time.sleep(0.2)
+        top10 = sorted(scores, key=scores.get, reverse=True)[:ALPACA_HOLD_MAX_POSITIONS]
+        for symbol in list(alpaca_hold_trades.keys()):
+            if symbol not in top10:
+                pos = get_alpaca_position(symbol)
+                if pos:
+                    qty = abs(float(pos.qty))
+                    req = MarketOrderRequest(symbol=symbol, qty=qty, side=OrderSide.SELL, time_in_force=TimeInForce.DAY)
+                    alpaca_client.submit_order(req)
+                with _lock:
+                    alpaca_hold_trades.pop(symbol, None)
+                send_telegram(f"<b>Hold Alpaca vendu</b> {symbol} (reequilibrage)")
+        alloc_per = hold_capital / ALPACA_HOLD_MAX_POSITIONS
+        for symbol in top10:
+            if symbol not in alpaca_hold_trades:
+                req = MarketOrderRequest(symbol=symbol, notional=round(alloc_per, 2), side=OrderSide.BUY, time_in_force=TimeInForce.DAY)
+                alpaca_client.submit_order(req)
+                price = get_alpaca_price(symbol)
+                with _lock:
+                    alpaca_hold_trades[symbol] = {"entry": price, "amount": alloc_per, "score": scores.get(symbol, 0)}
+                send_telegram(f"<b>Hold Alpaca acheté</b> {symbol} ~${alloc_per:.0f}")
+                time.sleep(0.3)
+        alpaca_last_rebalance = datetime.utcnow()
+        send_telegram(f"<b>Reequilibrage Hold Alpaca termine</b>\nTop: {', '.join(top10)}")
+    except Exception as e:
+        record_error(f"scan_alpaca_hold: {e}")
+
+def scan_alpaca_dt():
+    if not alpaca_client or not alpaca_data_client: return
+    try:
+        account = get_alpaca_account()
+        if not account: return
+        equity = float(account.equity)
+        dt_capital = equity * ALPACA_DT_ALLOC_PCT
+        per_trade = dt_capital / ALPACA_DT_MAX_POSITIONS
+        for symbol in ALPACA_DT_UNIVERSE:
+            if len(alpaca_dt_trades) >= ALPACA_DT_MAX_POSITIONS: break
+            if symbol in alpaca_dt_trades: continue
+            ta = get_alpaca_ta(symbol)
+            if not ta or not ta.get("rsi"): continue
+            rsi = ta["rsi"]
+            trend = ta["trend"]
+            if rsi < 35 and trend == "haussier":
+                reason = f"RSI={rsi:.0f} survendu haussier"
+                place_alpaca_order(symbol, "buy", per_trade, label="DT Long", reason=reason, short=False)
+            elif rsi > 65 and trend == "baissier":
+                reason = f"RSI={rsi:.0f} surachete baissier"
+                place_alpaca_order(symbol, "buy", per_trade, label="DT Short", reason=reason, short=True)
+            time.sleep(0.3)
+    except Exception as e:
+        record_error(f"scan_alpaca_dt: {e}")
+
+def check_alpaca_dt_risk():
+    if not alpaca_client: return
+    for symbol, trade in list(alpaca_dt_trades.items()):
+        try:
+            price = get_alpaca_price(symbol)
+            if not price: continue
+            entry = trade.get("entry", price)
+            short = trade.get("short", False)
+            amount = trade.get("amount", 0)
+            if not short:
+                net_pnl_pct = ((price - entry) / entry * 100) if entry else 0
+                current_peak = trade.get("peak", entry)
+                if price > current_peak:
+                    with _lock:
+                        alpaca_dt_trades[symbol]["peak"] = price
+                        current_peak = price
+                trailing_drop = ((current_peak - price) / current_peak * 100) if current_peak else 0
+            else:
+                net_pnl_pct = ((entry - price) / entry * 100) if entry else 0
+                current_peak = trade.get("peak", entry)
+                if price < current_peak:
+                    with _lock:
+                        alpaca_dt_trades[symbol]["peak"] = price
+                        current_peak = price
+                trailing_drop = ((price - current_peak) / current_peak * 100) if current_peak else 0
+            if net_pnl_pct <= -ALPACA_DT_SL_PCT:
+                send_telegram(f"<b>SL Alpaca</b> {symbol} ({net_pnl_pct:.1f}%)")
+                place_alpaca_order(symbol, "sell", amount, label="SL")
+            elif trailing_drop >= ALPACA_DT_TRAILING_PCT and net_pnl_pct > 0:
+                send_telegram(f"<b>TS Alpaca</b> {symbol} (recul -{trailing_drop:.1f}%)")
+                place_alpaca_order(symbol, "sell", amount, label="TS")
+            elif net_pnl_pct >= ALPACA_DT_TP_PCT:
+                send_telegram(f"<b>TP Alpaca</b> {symbol} (+{net_pnl_pct:.1f}%)")
+                place_alpaca_order(symbol, "sell", amount, label="TP")
+        except Exception as e:
+            record_error(f"check_alpaca_dt_risk {symbol}: {e}")
+
+def cmd_alpaca_status():
+    account = get_alpaca_account()
+    if not account:
+        send_telegram("Alpaca non connecte."); return
+    r  = "<b>Portefeuille Alpaca</b>\n" + "="*22 + "\n\n"
+    r += f"Equity : ${float(account.equity):.2f}\n"
+    r += f"Cash   : ${float(account.cash):.2f}\n\n"
+    r += f"Hold ({int(ALPACA_HOLD_ALLOC_PCT*100)}%) : {len(alpaca_hold_trades)} positions\n"
+    r += f"DT   ({int(ALPACA_DT_ALLOC_PCT*100)}%) : {len(alpaca_dt_trades)}/{ALPACA_DT_MAX_POSITIONS} positions\n"
+    send_telegram(r)
+
+def cmd_alpaca_hold_positions():
+    if not alpaca_hold_trades:
+        send_telegram("Aucune position hold Alpaca."); return
+    msg = "<b>Hold Alpaca</b>\n\n"
+    for s, t in alpaca_hold_trades.items():
+        price = get_alpaca_price(s) or t.get("entry", 0)
+        entry = t.get("entry") or price
+        pnl_pct = ((price - entry) / entry * 100) if entry else 0
+        msg += f"<b>{s}</b> ${t.get('amount',0):.0f} ({pnl_pct:+.1f}%)\n"
+    send_telegram(msg)
+
+def cmd_alpaca_dt_positions():
+    if not alpaca_dt_trades:
+        send_telegram("Aucun day trade Alpaca actif."); return
+    msg = "<b>Day Trades Alpaca</b>\n\n"
+    for s, t in alpaca_dt_trades.items():
+        price = get_alpaca_price(s) or t.get("entry", 0)
+        entry = t.get("entry") or price
+        short = t.get("short", False)
+        direction = "SHORT" if short else "LONG"
+        pnl_pct = ((entry - price) / entry * 100) if (short and entry) else (((price - entry) / entry * 100) if entry else 0)
+        msg += f"<b>{s}</b> {direction} ${t.get('amount',0):.0f} ({pnl_pct:+.1f}%)\n"
+    send_telegram(msg)
+
+def cmd_alpaca_rebalance():
+    global alpaca_last_rebalance
+    alpaca_last_rebalance = None
+    send_telegram("<b>Reequilibrage Hold Alpaca force...</b>")
+    scan_alpaca_hold()
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # ANALYSE TECHNIQUE
@@ -538,6 +807,8 @@ def cmd_aide():
         "/vacances | /retour\n\n"
         "/alerte BTC-EUR 90000\n"
         "/alertes\n\n"
+        "/alpaca | /alpaca_hold | /alpaca_dt\n"
+        "/alpaca_rebalance\n\n"
         "/urgence - Ferme les trades"
     )
 
@@ -723,6 +994,10 @@ def handle_telegram():
                 elif cmd == "/vacances":                cmd_vacances()
                 elif cmd == "/retour":                  cmd_retour()
                 elif cmd == "/alertes":                 cmd_voir_alertes()
+                elif cmd == "/alpaca":            cmd_alpaca_status()
+                elif cmd == "/alpaca_hold":       cmd_alpaca_hold_positions()
+                elif cmd == "/alpaca_dt":         cmd_alpaca_dt_positions()
+                elif cmd == "/alpaca_rebalance":  cmd_alpaca_rebalance()
                 elif cmd == "/pourquoi" and args:       cmd_pourquoi(args[0].upper())
                 elif cmd == "/alerte" and len(args)>=2: cmd_alerte(args)
         except Exception:
@@ -740,6 +1015,33 @@ def thread_news_watcher():
         except:
             pass
         time.sleep(1200)
+
+def thread_alpaca_dt():
+    while True:
+        try:
+            check_alpaca_dt_risk()
+            if not trading_paused and not vacation_mode:
+                scan_alpaca_dt()
+        except Exception as e:
+            record_error(f"thread_alpaca_dt: {e}")
+        time.sleep(15)
+
+def thread_alpaca_risk():
+    while True:
+        try:
+            check_alpaca_dt_risk()
+        except Exception as e:
+            record_error(f"thread_alpaca_risk: {e}")
+        time.sleep(5)
+
+def thread_alpaca_hold():
+    while True:
+        try:
+            if not trading_paused and not vacation_mode:
+                scan_alpaca_hold()
+        except Exception as e:
+            record_error(f"thread_alpaca_hold: {e}")
+        time.sleep(21600)
 
 def thread_crypto():
     while True:
@@ -806,6 +1108,9 @@ def main():
         "COINBASE (CRYPTO)\n"
         "Day Trade : 1 Heure (Hyperactif)\n"
         "Les frais Coinbase (~1.2%) sont deduits des PnL.\n\n"
+        "ALPACA (STOCKS)\n"
+        "Hold 60% : top actifs dynamiques\n"
+        "Day Trade 40% : Long+Short illimite\n\n"
         "Tape /aide"
     )
     threading.Thread(target=start_health_server, daemon=True).start()
@@ -814,6 +1119,9 @@ def main():
     threading.Thread(target=thread_risk,         daemon=True).start()
     threading.Thread(target=thread_scheduler,    daemon=True).start()
     threading.Thread(target=thread_news_watcher, daemon=True).start()
+    threading.Thread(target=thread_alpaca_dt,   daemon=True).start()
+    threading.Thread(target=thread_alpaca_risk, daemon=True).start()
+    threading.Thread(target=thread_alpaca_hold, daemon=True).start()
 
     log("🚀 BOT V7 SCALPING LANCÉ - Mode scalping ultra-rapide activé")
 
