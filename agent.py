@@ -75,7 +75,7 @@ CRYPTO_HOLD_ALLOC  = {
 COINBASE_FEE_PCT              = 1.2   # frais aller-retour
 CRYPTO_SL_PCT                 = 2.5   # stop loss net
 CRYPTO_TP_PCT                 = 4.0   # take profit net rentable apres frais
-TRAILING_STOP_PCT             = 3.0   # trailing stop depuis le pic (elargi pour eviter micro-ventes)
+TRAILING_STOP_PCT             = 3.0   # trailing stop elargi (evite les micro-ventes)
 CRYPTO_RISK_PER_TRADE         = 0.15  # 15% du cash dispo par trade
 MAX_CRYPTO_POSITIONS          = 8
 CRYPTO_MIN_CONFIDENCE         = 65
@@ -469,17 +469,22 @@ def get_crypto_ta(symbol):
         )
         prices = [float(c["close"]) for c in candles.get("candles", [])]
         prices = prices[::-1]  # ordre chronologique
-        if len(prices) < 14:
+        if len(prices) < 55:  # On a besoin de plus de bougies pour la MA50
             return None
-        rsi  = calculate_rsi(prices, period=7)
-        ma20 = sum(prices[-20:]) / 20 if len(prices) >= 20 else None
+            
+        rsi  = calculate_rsi(prices, period=14) # RSI lissé sur 14 périodes
+        ma20 = sum(prices[-20:]) / 20
+        ma50 = sum(prices[-50:]) / 50
         cur  = prices[-1]
+        
         return {
             "rsi":       rsi,
             "ma20":      ma20,
+            "ma50":      ma50,
             "current":   cur,
-            "trend":     "haussier" if (ma20 and cur > ma20) else "baissier",
-            "above_ma20": cur > ma20 if ma20 else None,
+            "trend":     "haussier" if (cur > ma20) else "baissier",
+            "strong_trend": (ma20 > ma50), # Tendance lourde validée !
+            "above_ma20": cur > ma20,
             "week_perf": ((cur - prices[-7]) / prices[-7] * 100) if len(prices) >= 7 else None,
             "prices":    prices
         }
@@ -843,7 +848,6 @@ def scan_stocks():
             break
         time.sleep(0.5)
 
-
 # ==================================================
 # GESTION DU DRAWDOWN DYNAMIQUE (DISJONCTEUR)
 # ==================================================
@@ -921,19 +925,26 @@ def scan_crypto():
         if ta.get("week_perf") is None or abs(ta["week_perf"]) < 0.1:
             continue
 
-        rsi        = ta["rsi"]
-        trend      = ta["trend"]
-        above_ma20 = ta.get("above_ma20")
-        prices     = ta.get("prices", [])
-        has_setup  = detect_breakout_setup(prices)
+        rsi          = ta["rsi"]
+        strong_trend = ta.get("strong_trend", False)
+        prices       = ta.get("prices", [])
+        has_setup    = detect_breakout_setup(prices)
 
-        if (rsi < 35 and trend == "haussier" and above_ma20) or \
-           (40 <= rsi <= 60 and has_setup):
+        # STRATÉGIE 1 : Dip Buy sécurisé (On achète un creux UNIQUEMENT si la tendance de fond est haussière)
+        dip_buy = (rsi < 40 and strong_trend and price > ta["ma50"])
+        
+        # STRATÉGIE 2 : Breakout confirmé (Le prix casse une résistance AVEC une tendance de fond forte et du momentum)
+        breakout = (50 <= rsi <= 70 and strong_trend and has_setup)
+
+        if dip_buy or breakout:
             amount = cash_eur * CRYPTO_RISK_PER_TRADE
             if amount < 2:
                 continue
-            reason = "RSI=" + str(round(rsi, 0)) + " " + ("breakout" if has_setup else "") + " tendance=" + trend
+                
+            strat_name = "Rebond" if dip_buy else "Breakout"
+            reason = strat_name + " confirmé | RSI=" + str(round(rsi, 0)) + " | Trend de fond OK"
             place_crypto_order(symbol, "buy", amount, tp_pct=CRYPTO_TP_PCT, label="Scalping", reason=reason)
+            
         time.sleep(0.3)
 
 # ==================================================
