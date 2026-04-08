@@ -61,11 +61,13 @@ CRYPTO_HOLD_ALLOC  = {
     "BTC-EUR": 0.25, "ETH-EUR": 0.15,
     "SOL-EUR": 0.05, "XRP-EUR": 0.03, "LINK-EUR": 0.02,
 }
-MAX_CRYPTO_POSITIONS  = 3
-CRYPTO_SL_PCT         = 7.0
-CRYPTO_TP_PCT         = 12.0
-CRYPTO_MIN_CONFIDENCE = 65
-COINBASE_FEE_PCT      = 1.2
+MAX_CRYPTO_POSITIONS          = 3
+CRYPTO_SL_PCT                 = 7.0
+CRYPTO_TP_PCT                 = 12.0
+CRYPTO_MIN_CONFIDENCE         = 65
+COINBASE_FEE_PCT              = 1.2
+CRYPTO_CANDLE_WINDOW_HOURS    = 300
+CRYPTO_CIRCUIT_BREAKER_LOSSES = 3
 
 CRYPTO_UNIVERSE = [
     "BTC-EUR","ETH-EUR","SOL-EUR","XRP-EUR","LINK-EUR",
@@ -109,7 +111,8 @@ vacation_mode        = False
 custom_alerts        = {}
 active_stock_trades  = {}
 active_crypto_trades = {}
-_lock                = threading.Lock()
+_lock                = threading.RLock()
+loss_streak          = 0
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # UTILITAIRES
@@ -331,13 +334,16 @@ def get_ta(ticker, timeframe_type="day"):
 def get_crypto_ta(symbol):
     try:
         if not coinbase: return None
+        end_ts   = int(time.time())
+        start_ts = end_ts - CRYPTO_CANDLE_WINDOW_HOURS * 3600
         candles = coinbase.get_candles(
             product_id=symbol,
-            start=str(int((datetime.now()-timedelta(days=7)).timestamp())),
-            end=str(int(datetime.now().timestamp())),
+            start=str(start_ts),
+            end=str(end_ts),
             granularity="ONE_HOUR"
         )
         prices = [float(c["close"]) for c in candles.get("candles",[])]
+        prices = prices[::-1]  # remettre en ordre chronologique (Coinbase renvoie décroissant)
         if len(prices) < 14: return None
         rsi  = calculate_rsi(prices)
         ma20 = sum(prices[-20:])/20 if len(prices) >= 20 else None
@@ -363,7 +369,7 @@ def format_ta(ta):
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def get_news(ticker, count=5):
     try:
-        q = ticker.replace("-EUR","”).replace("-USD","”).replace("USDT","”)  
+        q = ticker.replace("-EUR","").replace("-USD","").replace("USDT","")  
         return requests.get(
             f"https://newsapi.org/v2/everything?q={q}&language=en"
             f"&sortBy=publishedAt&pageSize={count}&apiKey={NEWS_API_KEY}",
@@ -459,6 +465,7 @@ def place_order(symbol, side, qty, label=""):
 # ORDRES COINBASE (CRYPTO EN EUR)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def place_crypto_order(symbol, side, amount_eur, tp_pct=None, label="", reason=""):
+    global loss_streak
     try:
         if not coinbase: return
         if side == "buy":
@@ -478,9 +485,20 @@ def place_crypto_order(symbol, side, amount_eur, tp_pct=None, label="", reason="
         record_trade(symbol, side, round(amount_eur/(price or 1),8), price or 0, pnl)
         with _lock:
             if side == "buy":
-                active_crypto_trades[symbol] = {"side":"long","amount":amount_eur,"entry":price,"tp_pct":tp_pct or CRYPTO_TP_PCT,"reason":reason}
+                active_crypto_trades[symbol] = {
+                    "side": "long", "amount": amount_eur, "entry": price,
+                    "tp_pct": tp_pct or CRYPTO_TP_PCT, "reason": reason,
+                    "entry_time": datetime.utcnow().isoformat()
+                }
                 send_telegram(f"<b>LONG {label}</b> <b>{symbol}</b>\n~{amount_eur:.2f}EUR\nSL: -{CRYPTO_SL_PCT}% | TP: +{tp_pct or CRYPTO_TP_PCT}%")
             else:
+                entry_price = active_crypto_trades.get(symbol, {}).get("entry")
+                if entry_price and price:
+                    net_pnl_pct = ((price - entry_price) / entry_price * 100) - COINBASE_FEE_PCT
+                    if net_pnl_pct < 0:
+                        loss_streak += 1
+                    else:
+                        loss_streak = 0
                 active_crypto_trades.pop(symbol, None)
                 send_telegram(f"<b>Vente {label}</b> <b>{symbol}</b> ~{amount_eur:.2f}EUR\n(Frais deduits)")
     except Exception as e:
@@ -570,6 +588,9 @@ def scan_stocks():
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def scan_crypto():
     if trading_paused or vacation_mode or not coinbase: return
+    if loss_streak >= CRYPTO_CIRCUIT_BREAKER_LOSSES:
+        log(f"Circuit breaker: {loss_streak} pertes consécutives, scan crypto suspendu")
+        return
     if len(active_crypto_trades) >= MAX_CRYPTO_POSITIONS: return
     cash_eur  = get_crypto_balance("EUR")
     trade_cap = cash_eur
@@ -998,7 +1019,7 @@ def handle_telegram():
             )
             for update in res.json().get("result",[]):
                 last_update_id = update["update_id"] + 1
-                text = update.get("message",{}).get("text",""").strip()
+                text = update.get("message",{}).get("text","").strip()
                 cmd  = text.lower().split()[0] if text else ""
                 args = text.split()[1:] if len(text.split()) > 1 else []
                 if cmd in ["/aide","/start"]:           cmd_aide()
@@ -1094,7 +1115,12 @@ def thread_scheduler():
 
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200); self.end_headers(); self.wfile.write(b"OK")
+        body = b'{"status": "ok"}'
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
     def log_message(self, *args): pass
 
 def start_health_server():
