@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 # “””
-AGENT TRADING IA V12 — FUSION COMPLETE V11 + V10
+AGENT TRADING IA V12 - FUSION COMPLETE V11 + V10
 
 Base V11 (ton fichier) :
 
@@ -97,7 +97,7 @@ STOCK_TP_PCT           = 4.0
 CRYPTO_SL_PCT          = 3.0
 CRYPTO_TP_PCT          = 6.0
 MAX_RISK_PER_TRADE_PCT = 0.02
-CONFIDENCE_THRESHOLD   = 80     # FIXE — jamais adaptatif
+CONFIDENCE_THRESHOLD   = 80     # FIXE - jamais adaptatif
 MIN_CONFLUENCES        = 3
 START_CAPITAL          = 100_000.0
 
@@ -176,7 +176,7 @@ log.error(f”Telegram: {e}”)
 
 # ================================================================
 
-# TRADE LOGGER — JSON local + Notion
+# TRADE LOGGER - JSON local + Notion
 
 # ================================================================
 
@@ -428,7 +428,7 @@ return len(c), c
 
 # ================================================================
 
-# RISK MANAGEMENT — ATR + Kelly
+# RISK MANAGEMENT - ATR + Kelly
 
 # ================================================================
 
@@ -517,7 +517,7 @@ return {“SPY”: 0.0, “QQQ”: 0.0, “IBIT”: 0.0}
 
 # ================================================================
 
-# COINBASE DASHBOARD — V11
+# COINBASE DASHBOARD - V11
 
 # ================================================================
 
@@ -579,7 +579,7 @@ send_telegram(f”Erreur liquidation: {e}”)
 
 # ================================================================
 
-# EXECUTION STOCKS — Alpaca bracket orders
+# EXECUTION STOCKS - Alpaca bracket orders
 
 # ================================================================
 
@@ -647,7 +647,7 @@ except Exception as e:
 
 # ================================================================
 
-# EXECUTION CRYPTO — Coinbase market orders
+# EXECUTION CRYPTO - Coinbase market orders
 
 # ================================================================
 
@@ -805,7 +805,7 @@ log.error(f”Crypto scan {product_id}: {e}”)
 
 # ================================================================
 
-# REBALANCING — V11 (execute vraiment les ordres)
+# REBALANCING - V11 (execute vraiment les ordres)
 
 # ================================================================
 
@@ -830,7 +830,7 @@ log.error(f”Rebalance: {e}”)
 
 # ================================================================
 
-# DAILY REVIEW — 16h30 EST
+# DAILY REVIEW - 16h30 EST
 
 # ================================================================
 
@@ -905,7 +905,7 @@ return “Continuer strategie actuelle”
 
 # ================================================================
 
-# MORNING BRIEF — 9h EST
+# MORNING BRIEF - 9h EST
 
 # ================================================================
 
@@ -934,7 +934,7 @@ log.error(f”Morning brief: {e}”)
 
 # ================================================================
 
-# TELEGRAM COMMANDS — V11 + V10
+# TELEGRAM COMMANDS - V11 + V10
 
 # ================================================================
 
@@ -960,19 +960,19 @@ continue
 ```
         if text in ["/start", "/aide"]:
             send_telegram(
-                "*AGENT V12 — COMMANDES*\n\n"
+                "*AGENT V12 - COMMANDES*\n\n"
                 "*INFO*\n"
-                "/status — Etat global\n"
-                "/portfolio — Bilan Alpaca + Coinbase\n"
-                "/crypto — Detail crypto Coinbase\n"
-                "/marche — Snapshot marches\n"
-                "/positions — Trades ouverts\n"
-                "/trades — Historique OK/LOSS\n"
-                "/report — Daily review maintenant\n\n"
+                "/status - Etat global\n"
+                "/portfolio - Bilan Alpaca + Coinbase\n"
+                "/crypto - Detail crypto Coinbase\n"
+                "/marche - Snapshot marches\n"
+                "/positions - Trades ouverts\n"
+                "/trades - Historique OK/LOSS\n"
+                "/report - Daily review maintenant\n\n"
                 "*CONTROLE*\n"
-                "/pause — Suspendre trading\n"
-                "/resume — Reprendre trading\n"
-                "/liquidate — Vendre toutes les cryptos"
+                "/pause - Suspendre trading\n"
+                "/resume - Reprendre trading\n"
+                "/liquidate - Vendre toutes les cryptos"
             )
 
         elif text == "/status":
@@ -1085,7 +1085,7 @@ except Exception as e:
 ```
 
 def telegram_loop():
-“”“Thread dedie aux commandes Telegram — V11.”””
+“”“Thread dedie aux commandes Telegram - V11.”””
 log.info(“Telegram loop active”)
 while True:
 process_commands()
@@ -1093,7 +1093,7 @@ time.sleep(5)
 
 # ================================================================
 
-# HEALTH SERVER — Render
+# HEALTH SERVER - Render
 
 # ================================================================
 
@@ -1112,7 +1112,7 @@ def log_message(self, *args): pass
 
 if **name** == “**main**”:
 log.info(”=” * 55)
-log.info(“AGENT TRADING IA V12 — FUSION V11 + V10”)
+log.info(“AGENT TRADING IA V12 - FUSION V11 + V10”)
 log.info(f”MODE       : {‘PAPER’ if PAPER_MODE else ‘LIVE’}”)
 log.info(f”STOCKS     : {STOCK_WATCHLIST}”)
 log.info(f”CRYPTO     : {CRYPTO_WATCHLIST}”)
