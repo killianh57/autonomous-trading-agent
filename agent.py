@@ -1,4 +1,3 @@
-```python
 # -*- coding: utf-8 -*-
 # Agent Trading V12 - Portfolio calibre + Coinbase actif + Toutes commandes
 
@@ -586,7 +585,7 @@ def check_rebalancing():
                 trading_client.submit_order(MarketOrderRequest(
                     symbol=symbol, notional=round(buy_amt, 2), side=OrderSide.BUY, time_in_force=TimeInForce.DAY
                 ))
-                send_telegram(f"*REBALANCING*\nAchat `{symbol}` -> `{buy_amt:.2f}$`")
+                send_telegram(f"*REBALANCING*\nL'actif `{symbol}` a ete renforce pour `{buy_amt:.2f}$`")
     except Exception as e:
         log.error(f"Rebalancing: {e}")
 
@@ -673,7 +672,7 @@ def daily_review():
     except Exception:
         return
     if not today_t:
-        send_telegram(f"*DAILY REVIEW {today}*\nAucun trade\nPortfolio: {day_pct:+.2f}% | Total: {total_ret:+.2f}%")
+        send_telegram(f"*DAILY REVIEW {today}*\n\naucun trade aujourd'hui\nPortfolio: {day_pct:+.2f}% | Total: {total_ret:+.2f}%")
         return
     wins     = [t for t in today_t if t.get("pnl_usd",0) > 0]
     losses   = [t for t in today_t if t.get("pnl_usd",0) <= 0]
@@ -695,7 +694,7 @@ def daily_review():
     lines  = [f"{'OK' if t.get('pnl_usd',0)>0 else 'LOSS'} *{t['symbol']}* `{t.get('pnl_usd',0):+.2f}$` [{t.get('signal','?')}]" for t in today_t]
     rule   = _gen_rule(by_sig, by_hour)
     send_telegram(
-        f"*DAILY REVIEW {today}*\n"
+        f"*DAILY REVIEW {today}*\n\n"
         f"PnL: `{pnl_tot:+.2f}$` | Portfolio: `{day_pct:+.2f}%`\n"
         f"Win Rate: `{wr:.0f}%` ({len(wins)}W/{len(losses)}L)\n\n"
         + "\n".join(lines) +
@@ -729,7 +728,7 @@ def morning_brief():
         _, cv     = get_crypto_summary()
         vix_s     = "PANIQUE" if vix > 35 else "VOLATIL" if vix > 25 else "NORMAL"
         send_telegram(
-            f"*MORNING BRIEF*\n"
+            f"*MORNING BRIEF*\n\n"
             f"SPY `{snaps['SPY']:+.2f}%` | QQQ `{snaps['QQQ']:+.2f}%` | IBIT `{snaps['IBIT']:+.2f}%`\n"
             f"VIX: `{vix:.1f}` ({vix_s})\n\n"
             f"Alpaca: `{equity:,.0f}$` ({total_ret:+.2f}%)\n"
@@ -738,151 +737,6 @@ def morning_brief():
         )
     except Exception as e:
         log.error(f"Morning brief: {e}")
-
-# ================================================================
-# TELEGRAM COMMANDS (V12 COMPLETE)
-# ================================================================
-def process_commands():
-    global last_update_id, agent_paused
-    if not TELEGRAM_TOKEN:
-        return
-    try:
-        r = requests.get(
-            f"https://api.telegram.org/bot{TELEGRAM_TOKEN.strip()}/getUpdates",
-            params={"offset": last_update_id + 1, "timeout": 10}, timeout=15
-        )
-        if r.status_code != 200:
-            return
-        for update in r.json().get("result", []):
-            last_update_id = update["update_id"]
-            msg     = update.get("message", {})
-            text    = msg.get("text", "").strip().lower()
-            chat_id = str(msg.get("chat", {}).get("id"))
-            if chat_id != str(TELEGRAM_CHAT_ID).strip():
-                continue
-
-            if text in ["/start", "/aide"]:
-                send_telegram(
-                    "*AGENT V12*\n\n"
-                    "*INFO*\n"
-                    "/status - Etat agent\n"
-                    "/portfolio - Alpaca + Coinbase\n"
-                    "/crypto - Detail crypto\n"
-                    "/marche - Snapshot marches\n"
-                    "/positions - Positions ouvertes\n"
-                    "/trades - Historique OK/LOSS\n"
-                    "/report - Daily review\n\n"
-                    "*CONTROLE*\n"
-                    "/pause - Suspendre\n"
-                    "/resume - Reprendre\n"
-                    "/liquidate - Vendre cryptos"
-                )
-
-            elif text == "/status":
-                acc      = get_account()
-                vix      = get_vix()
-                trades   = load_trades()
-                wr       = get_win_rate() * 100
-                send_telegram(
-                    f"*STATUS AGENT V12*\n\n"
-                    f"Mode: `{'PAPER' if PAPER_MODE else 'LIVE'}`\n"
-                    f"Etat: `{'PAUSE' if agent_paused else 'ACTIF'}`\n"
-                    f"Equity: `{acc['equity']:.2f}$`\n"
-                    f"Cash: `{acc['cash']:.2f}$`\n"
-                    f"VIX: `{vix:.1f}`\n"
-                    f"Trades: `{len(trades)}` | Win Rate: `{wr:.0f}%`\n"
-                    f"Positions: `{len(open_positions_tracker)}`\n"
-                    f"Coinbase: `{'OK' if COINBASE_API_KEY else 'Non configure'}`"
-                )
-
-            elif text == "/portfolio":
-                acc       = get_account()
-                equity    = acc["equity"]
-                day_pnl   = equity - acc["last_equity"]
-                day_pct   = (day_pnl / acc["last_equity"] * 100) if acc["last_equity"] > 0 else 0
-                total_ret = (equity - START_CAPITAL) / START_CAPITAL * 100
-                details, cv = get_crypto_summary()
-                send_telegram(
-                    f"*PORTEFEUILLE GLOBAL*\n\n"
-                    f"*BOURSE (Alpaca)*\n"
-                    f"Valeur: `{equity:.2f}$`\n"
-                    f"Aujourd hui: `{day_pct:+.2f}%` ({day_pnl:+.0f}$)\n"
-                    f"Total: `{total_ret:+.2f}%`\n"
-                    f"Cash: `{acc['cash']:.2f}$`\n\n"
-                    f"*CRYPTO (Coinbase)*\n"
-                    f"Valeur: `{cv:.2f}EUR`\n"
-                    f"{details}"
-                )
-
-            elif text == "/crypto":
-                details, total = get_crypto_summary()
-                send_telegram(f"*CRYPTO COINBASE*\n\n{details}\n\n*TOTAL: {total:.2f}EUR*")
-
-            elif text == "/marche":
-                snaps = get_snapshots()
-                vix   = get_vix()
-                send_telegram(
-                    f"*MARCHES*\n\n"
-                    f"SPY: `{snaps['SPY']:+.2f}%`\n"
-                    f"QQQ: `{snaps['QQQ']:+.2f}%`\n"
-                    f"IBIT: `{snaps['IBIT']:+.2f}%`\n"
-                    f"VIX: `{vix:.1f}`\n\n"
-                    f"Bourse: `{'Ouverte' if is_open() else 'Fermee'}`"
-                )
-
-            elif text == "/positions":
-                pos    = trading_client.get_all_positions()
-                cb_pos = {k: v for k, v in open_positions_tracker.items() if v.get("platform") == "coinbase"}
-                if not pos and not cb_pos:
-                    send_telegram("Aucune position ouverte.")
-                else:
-                    lines = []
-                    for p in pos:
-                        pnl = float(p.unrealized_plpc) * 100
-                        lines.append(f"{'OK' if pnl>=0 else 'LOSS'} *{p.symbol}* (Alpaca) `{pnl:+.2f}%`")
-                    for key, v in cb_pos.items():
-                        price = get_crypto_price(key.replace("CB_",""))
-                        pnl   = (price - v["entry"]) / v["entry"] * 100 if price > 0 else 0
-                        lines.append(f"{'OK' if pnl>=0 else 'LOSS'} *{key}* (Coinbase) entry:`{v['entry']:.4f}` `{pnl:+.2f}%`")
-                    send_telegram("*POSITIONS*\n\n" + "\n".join(lines))
-
-            elif text == "/trades":
-                trades = load_trades()
-                if not trades:
-                    send_telegram("Aucun trade enregistre.")
-                else:
-                    recent = trades[-10:]
-                    wins   = sum(1 for t in trades if t.get("pnl_usd",0) > 0)
-                    total  = len(trades)
-                    wr     = wins / total * 100 if total > 0 else 0
-                    lines  = [
-                        f"{'OK' if t.get('pnl_usd',0)>0 else 'LOSS'} *{t['symbol']}* `{t.get('pnl_usd',0):+.2f}$` [{t.get('signal','?')}] ({t.get('platform','?')})"
-                        for t in reversed(recent)
-                    ]
-                    send_telegram(f"*HISTORIQUE TRADES*\nWin Rate: `{wr:.0f}%` ({wins}W/{total-wins}L)\n\n" + "\n".join(lines))
-
-            elif text == "/report":
-                daily_review()
-
-            elif text == "/pause":
-                agent_paused = True
-                send_telegram("Agent PAUSE. /resume pour reprendre.")
-
-            elif text == "/resume":
-                agent_paused = False
-                send_telegram("Agent REPRIS.")
-
-            elif text == "/liquidate":
-                liquidate_crypto()
-
-    except Exception as e:
-        log.error(f"Commands: {e}")
-
-def telegram_loop():
-    log.info("Telegram loop active")
-    while True:
-        process_commands()
-        time.sleep(3)
 
 # ================================================================
 # HEALTH SERVER
@@ -917,10 +771,10 @@ if __name__ == "__main__":
     schedule.every().day.at("16:30").do(daily_review)
 
     send_telegram(
-        f"*AGENT V12 EN LIGNE*\n"
+        f"*AGENT V12 EN LIGNE*\n\n"
         f"Alpaca OK | Coinbase {'OK' if COINBASE_API_KEY else 'non configure'}\n"
         f"Mode: {'PAPER' if PAPER_MODE else 'LIVE'}\n"
-        f"Stocks scan 15min | Crypto scan 30min\n"
+        f"Stocks scan 15min | Crypto scan 30min\n\n"
         f"/aide pour les commandes"
     )
 
