@@ -258,7 +258,7 @@ def scan_crypto():
         for product_id in CRYPTO_WATCHLIST:
             price = float(cb.get_best_bid_ask(product_ids=[product_id]).pricebooks[0].bids[0].price)
             res = claude_client.messages.create(
-                model="claude-3-5-haiku-20241022",
+                model="claude-haiku-4-5-20251001",
                 max_tokens=100,
                 system='Trader institutionnel. Reponds JSON uniquement, rien d\'autre. Format exact: {"action":"BUY","confidence":75} ou {"action":"HOLD","confidence":40}',
                 messages=[{"role": "user", "content": f"Crypto: {product_id}, Price EUR: {price}. Signal?"}]
@@ -321,7 +321,7 @@ def scan_and_trade():
                 continue
             price = bars[-1].close
             res = claude_client.messages.create(
-                model="claude-3-5-haiku-20241022",
+                model="claude-haiku-4-5-20251001",
                 max_tokens=100,
                 system='Trader institutionnel. Reponds JSON uniquement, rien d\'autre. Format exact: {"action":"BUY","confidence":75} ou {"action":"SHORT","confidence":60} ou {"action":"HOLD","confidence":40}',
                 messages=[{"role": "user", "content": f"Ticker: {ticker}, Price: {price}$. Signal?"}]
