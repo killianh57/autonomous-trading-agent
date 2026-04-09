@@ -840,8 +840,11 @@ def main() -> None:
     log.info("Alpaca Bot V1 demarrage...")
     load_state()
 
+    log.info("ENV CHECK: ALPACA_API_KEY=%s ALPACA_SECRET_KEY=%s",
+             bool(ALPACA_API_KEY), bool(ALPACA_SECRET_KEY))
     if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
         log.error("ALPACA_API_KEY ou ALPACA_SECRET_KEY manquant")
+        log.error("Vars dispo: %s", [k for k in os.environ if "ALPACA" in k])
         return
 
     log.info("Config: KEY=%s... PAPER=%s TELEGRAM=%s CHAT=%s",
