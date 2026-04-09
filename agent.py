@@ -1,16 +1,17 @@
 # -*- coding: utf-8 -*-
+
 """
 AGENT TRADING IA V10 — BASE V9 + TOUTES AMÉLIORATIONS
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Architecture :
-  Alpaca   -> Stocks (NVDA, TSLA, AAPL, META, MSFT) + ETFs Core-Satellite
-  Coinbase -> Crypto direct (BTC-USD, ETH-USD)
+Alpaca   -> Stocks (NVDA, TSLA, AAPL, META, MSFT) + ETFs Core-Satellite
+Coinbase -> Crypto direct (BTC-EUR, ETH-EUR)
 
 V9 conservé : Coinbase RESTClient, bracket orders, SMC, ATR sizing, allocation HOLD/DAYTRADE
 V10 ajouté  : EMA 9/21, RSI divergence, volume filter, VIX filter, blackout 11h-14h,
-              news sentiment, multi-confluence, Kelly sizing, trade logger JSON+Notion,
-              daily review 16h30, morning brief 9h, rebalancing check, crypto SL/TP manuel,
-              commandes Telegram enrichies, health server Render
+news sentiment, multi-confluence, Kelly sizing, trade logger JSON+Notion,
+daily review 16h30, morning brief 9h, rebalancing check, crypto SL/TP manuel,
+commandes Telegram enrichies, health server Render
 """
 
 import os, json, time, threading, logging, uuid
@@ -45,6 +46,7 @@ load_dotenv()
 # ================================================================
 # CONFIGURATION
 # ================================================================
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", datefmt="%H:%M:%S")
 log = logging.getLogger(__name__)
 
@@ -57,8 +59,10 @@ TELEGRAM_CHAT_ID    = os.getenv("TELEGRAM_CHAT_ID")
 NEWS_API_KEY        = os.getenv("NEWS_API_KEY", "")
 NOTION_TOKEN        = os.getenv("NOTION_TOKEN", "")
 NOTION_PAGE_ID      = os.getenv("NOTION_PAGE_ID", "3375afb215b4819785c5df026f5cdd75")
+
+# CORRECTION: Appel de l'ancienne variable pour que Coinbase s'active bien !
 COINBASE_API_KEY    = os.getenv("COINBASE_API_KEY", "")
-COINBASE_API_SECRET = os.getenv("COINBASE_API_SECRET", "")
+COINBASE_API_SECRET = os.getenv("COINBASE_SECRET_KEY", "")
 
 # Allocation V9 : HOLD (core passif) / DAYTRADE (satellite actif)
 HOLD_PCT     = 0.65
@@ -73,9 +77,9 @@ MAX_RISK_PER_TRADE_PCT = 0.02
 CONFIDENCE_THRESHOLD   = 80      # FIXE - jamais adaptatif
 MIN_CONFLUENCES        = 3
 
-# Watchlists
+# Watchlists - CORRECTION: Paires en EUR
 STOCK_WATCHLIST  = ["NVDA", "TSLA", "AAPL", "META", "MSFT"]
-CRYPTO_WATCHLIST = ["BTC-USD", "ETH-USD"]
+CRYPTO_WATCHLIST = ["BTC-EUR", "ETH-EUR"]
 
 # Core-Satellite targets pour rebalancing
 CORE_TARGETS = {"VT": 0.40, "SCHD": 0.15, "VNQ": 0.05, "QQQ": 0.15, "IBIT": 0.10}
@@ -106,6 +110,7 @@ START_CAPITAL          = 100_000.0
 # ================================================================
 # CLIENTS
 # ================================================================
+
 trading_client = TradingClient(ALPACA_API_KEY, ALPACA_SECRET_KEY, paper=PAPER_MODE)
 data_client    = StockHistoricalDataClient(ALPACA_API_KEY, ALPACA_SECRET_KEY)
 claude_client  = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
@@ -120,6 +125,7 @@ def get_coinbase_client():
 # ================================================================
 # TELEGRAM
 # ================================================================
+
 def send_telegram(msg):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         log.info("[TG] " + msg[:100])
@@ -136,16 +142,19 @@ def send_telegram(msg):
 # ================================================================
 # TRADE LOGGER
 # ================================================================
+
 def load_trades():
     if os.path.exists(TRADES_FILE):
         try:
-            return json.load(open(TRADES_FILE))
+            with open(TRADES_FILE) as f:
+                return json.load(f)
         except Exception:
             return []
     return []
 
 def save_trades(trades):
-    json.dump(trades, open(TRADES_FILE, "w"), indent=2, default=str)
+    with open(TRADES_FILE, "w") as f:
+        json.dump(trades, f, indent=2, default=str)
 
 def log_trade_open(key, side, entry, sl, tp, signal_type, conviction, n_conf, platform="alpaca"):
     open_positions_tracker[key] = {
@@ -192,9 +201,17 @@ def _log_to_notion(trade):
     try:
         requests.patch(
             f"https://api.notion.com/v1/blocks/{NOTION_PAGE_ID}/children",
-            headers={"Authorization": f"Bearer {NOTION_TOKEN}", "Notion-Version": "2022-06-28", "Content-Type": "application/json"},
-            json={"children": [{"object": "block", "type": "paragraph",
-                "paragraph": {"rich_text": [{"type": "text", "text": {"content": content}}]}}]},
+            headers={
+                "Authorization": f"Bearer {NOTION_TOKEN}", 
+                "Notion-Version": "2022-06-28", 
+                "Content-Type": "application/json"
+            },
+            json={
+                "children": [{
+                    "object": "block", "type": "paragraph",
+                    "paragraph": {"rich_text": [{"type": "text", "text": {"content": content}}]}
+                }]
+            },
             timeout=5
         )
     except Exception as e:
@@ -203,6 +220,7 @@ def _log_to_notion(trade):
 # ================================================================
 # INDICATEURS TECHNIQUES
 # ================================================================
+
 def calculate_atr(bars, period=14):
     if len(bars) < period + 1:
         return 0
@@ -280,6 +298,7 @@ def get_smc_intraday(ticker):
 # ================================================================
 # NEWS SENTIMENT
 # ================================================================
+
 def get_news_sentiment(ticker):
     if not NEWS_API_KEY:
         return {"sentiment": "NEUTRAL", "pause": False, "reason": ""}
@@ -309,27 +328,29 @@ def get_news_sentiment(ticker):
 # ================================================================
 # MULTI-CONFLUENCE
 # ================================================================
+
 def count_confluences(smc, news_sentiment, direction):
     c = []
     if direction == "BUY":
         if smc.get("ema_bullish"):         c.append("EMA9>EMA21")
-        if smc.get("sweep_bullish"):        c.append("Sweep bull")
-        if smc.get("rsi_div_bull"):         c.append("RSI div bull")
-        if smc.get("volume_ok"):            c.append("Volume OK")
-        if news_sentiment == "BULLISH":     c.append("News bull")
-        if smc.get("trend") == "haussier":  c.append("Trend haussier")
+        if smc.get("sweep_bullish"):       c.append("Sweep bull")
+        if smc.get("rsi_div_bull"):        c.append("RSI div bull")
+        if smc.get("volume_ok"):           c.append("Volume OK")
+        if news_sentiment == "BULLISH":    c.append("News bull")
+        if smc.get("trend") == "haussier": c.append("Trend haussier")
     else:
-        if not smc.get("ema_bullish"):      c.append("EMA9<EMA21")
-        if smc.get("sweep_bearish"):        c.append("Sweep bear")
-        if smc.get("rsi_div_bear"):         c.append("RSI div bear")
-        if smc.get("volume_ok"):            c.append("Volume OK")
-        if news_sentiment == "BEARISH":     c.append("News bear")
-        if smc.get("trend") == "baissier":  c.append("Trend baissier")
+        if not smc.get("ema_bullish"):     c.append("EMA9<EMA21")
+        if smc.get("sweep_bearish"):       c.append("Sweep bear")
+        if smc.get("rsi_div_bear"):        c.append("RSI div bear")
+        if smc.get("volume_ok"):           c.append("Volume OK")
+        if news_sentiment == "BEARISH":    c.append("News bear")
+        if smc.get("trend") == "baissier": c.append("Trend baissier")
     return len(c), c
 
 # ================================================================
 # RISK MANAGEMENT — ATR + Kelly
 # ================================================================
+
 def get_win_rate():
     trades = load_trades()
     if len(trades) < 5:
@@ -344,6 +365,7 @@ def get_account_info():
 # ================================================================
 # BRACKET ORDER STOCKS — Alpaca
 # ================================================================
+
 def place_bracket_order(symbol, side, capital_allocated, limit_price, sl_pct, tp_pct,
                         signal_type="SMC", conviction=80, conf_list=None):
     if conf_list is None:
@@ -363,9 +385,11 @@ def place_bracket_order(symbol, side, capital_allocated, limit_price, sl_pct, tp
         kelly    = max(0.01, min(win_rate - (1 - win_rate) / rr, 0.25))
         qty_kelly= (equity * kelly * 0.25) / limit_price
         qty      = round(min(qty_atr, qty_cap, qty_kelly), 4)
+        
         if qty <= 0:
             log.warning(f"{symbol} qty=0 apres risk management")
             return
+            
         if side == "buy":
             sl_price   = round(limit_price * (1 - sl_pct / 100.0), 2)
             tp_price   = round(limit_price * (1 + tp_pct / 100.0), 2)
@@ -377,6 +401,7 @@ def place_bracket_order(symbol, side, capital_allocated, limit_price, sl_pct, tp
             sl_price   = round(limit_price * (1 + sl_pct / 100.0), 2)
             tp_price   = round(limit_price * (1 - tp_pct / 100.0), 2)
             order_side = OrderSide.SELL
+            
         req = LimitOrderRequest(
             symbol=symbol, qty=qty, side=order_side,
             time_in_force=TimeInForce.DAY,
@@ -403,6 +428,7 @@ def place_bracket_order(symbol, side, capital_allocated, limit_price, sl_pct, tp
 # ================================================================
 # CRYPTO ORDERS — Coinbase
 # ================================================================
+
 def get_crypto_price(product_id):
     try:
         cb  = get_coinbase_client()
@@ -475,6 +501,7 @@ def place_crypto_order(product_id, side, usd_size, signal_type, conviction, conf
         max_usd  = account["equity"] * MAX_RISK_PER_TRADE_PCT * 10
         usd_size = min(usd_size, max_usd)
         order_id = str(uuid.uuid4())
+        
         if side == "buy":
             cb.market_order_buy(client_order_id=order_id, product_id=product_id, quote_size=str(round(usd_size, 2)))
         else:
@@ -482,10 +509,12 @@ def place_crypto_order(product_id, side, usd_size, signal_type, conviction, conf
                 send_telegram(f"SHORT crypto bloque {product_id} - LIVE")
                 return
             cb.market_order_sell(client_order_id=order_id, product_id=product_id, base_size=str(round(usd_size / price, 6)))
+            
         sl  = price * (1 - CRYPTO_SL_PCT/100) if side == "buy" else price * (1 + CRYPTO_SL_PCT/100)
         tp  = price * (1 + CRYPTO_TP_PCT/100) if side == "buy" else price * (1 - CRYPTO_TP_PCT/100)
         rr  = CRYPTO_TP_PCT / CRYPTO_SL_PCT
         key = f"CB_{product_id}"
+        
         log_trade_open(key, side, price, sl, tp, signal_type, conviction, len(conf_list), "coinbase")
         send_telegram(
             f"BTC *CRYPTO COINBASE*\n"
@@ -528,6 +557,7 @@ def check_crypto_sl_tp():
 # ================================================================
 # CLAUDE SIGNAL
 # ================================================================
+
 PROMPT_SYSTEM = (
     "Tu es un trader institutionnel. Jamais d'emotion. RR 1:2 minimum.\n"
     "Reponds UNIQUEMENT en JSON strict :\n"
@@ -548,12 +578,12 @@ def get_claude_signal(ticker, smc, news):
     )
     try:
         res = claude_client.messages.create(
-            model="claude-haiku-4-5-20251001",
+            model="claude-3-5-haiku-20241022",
             max_tokens=150,
             system=PROMPT_SYSTEM,
             messages=[{"role": "user", "content": context}]
         )
-        raw = res.content[0].text.strip().replace("```json","").replace("```","")
+        raw = res.content[0].text.strip().replace("```json", "").replace("```", "")
         return json.loads(raw)
     except Exception as e:
         log.error(f"Claude {ticker}: {e}")
@@ -562,6 +592,7 @@ def get_claude_signal(ticker, smc, news):
 # ================================================================
 # HELPERS MARCHE
 # ================================================================
+
 def is_market_open():
     now = datetime.now(EST)
     if now.weekday() >= 5:
@@ -587,6 +618,7 @@ def get_market_snapshots():
 # ================================================================
 # SCAN STOCKS
 # ================================================================
+
 def scan_and_trade():
     global agent_paused
     if agent_paused or not is_market_open() or is_blackout():
@@ -599,6 +631,7 @@ def scan_and_trade():
     n_tickers     = len(STOCK_WATCHLIST)
     trade_capital = account["equity"] * DAYTRADE_PCT / n_tickers
     log.info(f"Scan stocks (VIX:{vix:.1f})")
+    
     for ticker in STOCK_WATCHLIST:
         if ticker in open_positions_tracker:
             continue
@@ -614,11 +647,14 @@ def scan_and_trade():
                 continue
             if signal.get("confidence", 0) < CONFIDENCE_THRESHOLD:
                 continue
+                
             action = signal["action"]
             side   = "buy" if action == "BUY" else "sell"
             n_conf, conf_list = count_confluences(smc, news["sentiment"], action)
+            
             if n_conf < MIN_CONFLUENCES:
                 continue
+                
             place_bracket_order(
                 ticker, side, trade_capital, smc["current"],
                 STOCK_SL_PCT, STOCK_TP_PCT,
@@ -631,12 +667,14 @@ def scan_and_trade():
 # ================================================================
 # SCAN CRYPTO
 # ================================================================
+
 def scan_crypto():
     global agent_paused
     if agent_paused or not COINBASE_AVAILABLE or not COINBASE_API_KEY:
         return
     account  = get_account_info()
     usd_size = account["equity"] * 0.05
+    
     for product_id in CRYPTO_WATCHLIST:
         key = f"CB_{product_id}"
         if key in open_positions_tracker:
@@ -645,7 +683,7 @@ def scan_crypto():
             smc = get_crypto_smc(product_id)
             if not smc:
                 continue
-            ticker = product_id.replace("-USD","")
+            ticker = product_id.replace("-EUR", "")
             news   = get_news_sentiment(ticker)
             if news["pause"]:
                 continue
@@ -654,9 +692,11 @@ def scan_crypto():
                 continue
             if signal.get("confidence", 0) < CONFIDENCE_THRESHOLD:
                 continue
+                
             n_conf, conf_list = count_confluences(smc, news["sentiment"], "BUY")
             if n_conf < MIN_CONFLUENCES:
                 continue
+                
             place_crypto_order(product_id, "buy", usd_size, signal.get("signal_type","SMC"), signal["confidence"], conf_list)
             time.sleep(2)
         except Exception as e:
@@ -665,6 +705,7 @@ def scan_crypto():
 # ================================================================
 # DAILY REVIEW — 16h30 EST
 # ================================================================
+
 def daily_review():
     trades  = load_trades()
     today   = datetime.now(EST).strftime("%Y-%m-%d")
@@ -679,6 +720,7 @@ def daily_review():
     except Exception as e:
         log.error(f"Daily review: {e}")
         return
+        
     if not t_today:
         send_telegram(
             f"DAILY REVIEW {today}\n"
@@ -686,12 +728,14 @@ def daily_review():
             f"Portfolio: {day_pct:+.2f}% ({day_pnl:+.0f}$) | Total: {total_ret:+.2f}%"
         )
         return
+        
     wins      = [t for t in t_today if t["pnl_usd"] > 0]
     losses    = [t for t in t_today if t["pnl_usd"] <= 0]
     pnl_total = sum(t["pnl_usd"] for t in t_today)
     win_rate  = len(wins) / len(t_today) * 100
     all_50    = trades[-50:]
     by_signal, by_hour = {}, {}
+    
     for t in all_50:
         s = t.get("signal","?")
         h = t.get("entry_hour", 0)
@@ -700,12 +744,15 @@ def daily_review():
         k = "w" if t["pnl_usd"] > 0 else "l"
         by_signal[s][k] += 1
         by_hour[h][k]   += 1
+        
     def best_k(d):
         return max(d, key=lambda k: d[k]["w"]/(d[k]["w"]+d[k]["l"]+0.001)) if d else "N/A"
+        
     lines = [
         f"{'OK' if t['pnl_usd']>0 else 'LOSS'} {t['symbol']} {t['side'].upper()} {t['pnl_usd']:+.2f}$ [{t['signal']}] ({t.get('platform','alpaca')})"
         for t in t_today
     ]
+    
     send_telegram(
         f"DAILY REVIEW {today}\n"
         f"PnL trades: {pnl_total:+.2f}$ | Portfolio: {day_pct:+.2f}%\n"
@@ -730,6 +777,7 @@ def _generate_rule(by_signal, by_hour):
 # ================================================================
 # MORNING BRIEF — 9h EST
 # ================================================================
+
 def morning_brief():
     try:
         vix   = get_vix()
@@ -752,6 +800,7 @@ def morning_brief():
 # ================================================================
 # REBALANCING CHECK — 10h EST
 # ================================================================
+
 def check_rebalancing():
     try:
         account   = get_account_info()
@@ -771,6 +820,7 @@ def check_rebalancing():
 # ================================================================
 # TELEGRAM COMMANDS
 # ================================================================
+
 def process_commands():
     global last_update_id, agent_paused
     if not TELEGRAM_TOKEN:
@@ -854,6 +904,7 @@ def _cmd_positions():
             pnl_pct = float(p.unrealized_plpc) * 100
             status  = "OK" if pnl_pct >= 0 else "LOSS"
             lines.append(f"[{status}] {p.symbol} (Alpaca) qty:{float(p.qty):.2f} entry:{float(p.avg_entry_price):.2f}$ now:{float(p.current_price):.2f}$ PnL:{pnl_pct:+.2f}%")
+            
         cb_pos = {k: v for k, v in open_positions_tracker.items() if v.get("platform") == "coinbase"}
         for key, pos in cb_pos.items():
             price = get_crypto_price(key.replace("CB_",""))
@@ -861,9 +912,11 @@ def _cmd_positions():
                 pnl_pct = (price - pos["entry"]) / pos["entry"] * 100
                 status  = "OK" if pnl_pct >= 0 else "LOSS"
                 lines.append(f"[{status}] {key} (Coinbase) {pos['side'].upper()} entry:{pos['entry']:,.2f}$ now:{price:,.2f}$ PnL:{pnl_pct:+.2f}%")
+                
         if not lines:
             send_telegram("Aucune position ouverte.")
             return
+            
         send_telegram(f"POSITIONS ({len(lines)})\n" + "\n".join(lines))
     except Exception as e:
         send_telegram(f"Erreur /positions: {e}")
@@ -891,6 +944,7 @@ def _cmd_trades():
 # ================================================================
 # HEALTH SERVER — Render
 # ================================================================
+
 class _Health(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -904,6 +958,7 @@ def _run_health():
 # ================================================================
 # MAIN
 # ================================================================
+
 if __name__ == "__main__":
     log.info("=" * 55)
     log.info("AGENT TRADING IA V10 — ALPACA + COINBASE")
