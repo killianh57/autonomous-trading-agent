@@ -98,14 +98,17 @@ def save_state() -> None:
 # ---------------------------------------------------------------------------
 def send_telegram(msg: str) -> None:
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        log.warning("Telegram non configure (token=%s chat=%s)", bool(TELEGRAM_TOKEN), bool(TELEGRAM_CHAT_ID))
         return
     try:
         url = "https://api.telegram.org/bot{}/sendMessage".format(TELEGRAM_TOKEN)
-        requests.post(
+        resp = requests.post(
             url,
             json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "HTML"},
             timeout=10,
         )
+        if not resp.ok:
+            log.error("Telegram erreur %d: %s", resp.status_code, resp.text[:300])
     except Exception as e:
         log.error("Telegram error: %s", e)
 
@@ -968,6 +971,9 @@ def main() -> None:
     if not CB_API_KEY or not CB_API_SECRET:
         log.error("COINBASE_API_KEY ou COINBASE_API_SECRET manquant")
         return
+
+    log.info("Config: CB_KEY=%s... TELEGRAM=%s CHAT=%s",
+             CB_API_KEY[:20], bool(TELEGRAM_TOKEN), bool(TELEGRAM_CHAT_ID))
 
     # Health server
     t = threading.Thread(target=run_health_server, daemon=True)
