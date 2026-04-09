@@ -2,13 +2,20 @@
 
 # Agent Trading V12 - Alpaca + Coinbase
 
-import os, json, time, threading, logging, uuid
-from datetime import datetime, timedelta, timezone
-from zoneinfo import ZoneInfo
+import os
+import json
+import time
+import threading
+import logging
+import uuid
 import requests
-from dotenv import load_dotenv
 import schedule
 import anthropic
+
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
+from dotenv import load_dotenv
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import (
@@ -20,7 +27,6 @@ from alpaca.data.requests import (
     StockBarsRequest, StockSnapshotRequest, StockLatestBarRequest
 )
 from alpaca.data.timeframe import TimeFrame
-from http.server import HTTPServer, BaseHTTPRequestHandler
 
 try:
     from coinbase.rest import RESTClient as CoinbaseClient
@@ -101,7 +107,7 @@ try:
     trading_client = TradingClient(ALPACA_API_KEY, ALPACA_SECRET_KEY, paper=PAPER_MODE)
     data_client    = StockHistoricalDataClient(ALPACA_API_KEY, ALPACA_SECRET_KEY)
     claude_client  = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-    log.info("Clients API initialises")
+    log.info("Clients API initialisés")
 except Exception as e:
     log.error(f"Erreur init clients: {e}")
 
@@ -530,21 +536,25 @@ def place_bracket_order(symbol, side, limit_price, sl_pct, tp_pct,
         sl_dist  = limit_price * (sl_pct / 100.0)
         if sl_dist <= 0:
             return
+        
         # ATR sizing
         qty_atr  = (equity * MAX_RISK_PER_TRADE_PCT) / sl_dist
         qty_cap  = (equity * DAYTRADE_PCT / len(STOCK_WATCHLIST)) / limit_price
+        
         # Kelly conservateur
         win_rate = get_win_rate()
         rr       = tp_pct / sl_pct
         kelly    = max(0.01, min(win_rate - (1 - win_rate) / rr, 0.25))
         qty_kelly= (equity * kelly * 0.25) / limit_price
         qty      = round(min(qty_atr, qty_cap, qty_kelly), 4)
+        
         if qty <= 0:
             log.warning(f"{symbol} qty=0")
             return
 
         if side == "buy":
-            sl_p, tp_p = limit_price * (1 - sl_pct/100), limit_price * (1 + tp_pct/100)
+            sl_p = limit_price * (1 - sl_pct/100)
+            tp_p = limit_price * (1 + tp_pct/100)
             req = LimitOrderRequest(
                 symbol=symbol, qty=qty, side=OrderSide.BUY,
                 time_in_force=TimeInForce.DAY, limit_price=round(limit_price, 2),
@@ -556,7 +566,8 @@ def place_bracket_order(symbol, side, limit_price, sl_pct, tp_pct,
             if not PAPER_MODE:
                 send_telegram(f"SHORT bloque {symbol} - LIVE")
                 return
-            sl_p, tp_p = limit_price * (1 + sl_pct/100), limit_price * (1 - tp_pct/100)
+            sl_p = limit_price * (1 + sl_pct/100)
+            tp_p = limit_price * (1 - tp_pct/100)
             req = LimitOrderRequest(
                 symbol=symbol, qty=qty, side=OrderSide.SELL,
                 time_in_force=TimeInForce.DAY, limit_price=round(limit_price, 2),
@@ -596,6 +607,7 @@ def place_crypto_order(product_id, side, usd_size, signal_type, conviction, conf
         max_usd  = account["equity"] * MAX_RISK_PER_TRADE_PCT * 10
         usd_size = min(usd_size, max_usd)
         order_id = str(uuid.uuid4())
+        
         if side == "buy":
             cb.market_order_buy(client_order_id=order_id, product_id=product_id, quote_size=str(round(usd_size, 2)))
         else:
@@ -609,6 +621,7 @@ def place_crypto_order(product_id, side, usd_size, signal_type, conviction, conf
         rr  = CRYPTO_TP_PCT / CRYPTO_SL_PCT
         key = f"CB_{product_id}"
         log_trade_open(key, side, price, sl, tp, signal_type, conviction, len(conf_list), "coinbase")
+        
         send_telegram(
             f"*CRYPTO COINBASE*\n"
             f"{'UP' if side=='buy' else 'DOWN'} *{product_id}* {side.upper()}\n"
@@ -635,6 +648,7 @@ def check_crypto_sl_tp():
             price = float(bids[0]["price"]) if bids else 0
             if price <= 0:
                 continue
+            
             side = pos["side"]
             if side == "buy":
                 if price <= pos["sl"]:
@@ -665,6 +679,7 @@ def scan_and_trade():
     if vix > 35:
         send_telegram(f"VIX {vix:.1f} > 35 - scan suspendu")
         return
+    
     log.info(f"Scan stocks (VIX:{vix:.1f})")
     for ticker in STOCK_WATCHLIST:
         if ticker in open_positions_tracker:
@@ -681,12 +696,15 @@ def scan_and_trade():
                 continue
             if signal.get("confidence", 0) < CONFIDENCE_THRESHOLD:
                 continue
+            
             action = signal["action"]
             side   = "buy" if action == "BUY" else "sell"
             n_conf, conf_list = count_confluences(smc, news["sentiment"], action)
+            
             if n_conf < MIN_CONFLUENCES:
                 log.info(f"{ticker} skip: {n_conf}/{MIN_CONFLUENCES} confluences")
                 continue
+            
             place_bracket_order(
                 ticker, side, smc["current"], STOCK_SL_PCT, STOCK_TP_PCT,
                 signal.get("signal_type","SMC"), signal["confidence"], conf_list
@@ -703,8 +721,10 @@ def scan_crypto():
     global agent_paused
     if agent_paused or not COINBASE_AVAILABLE or not COINBASE_API_KEY:
         return
+    
     account  = get_account_info()
     usd_size = account["equity"] * 0.02
+    
     for product_id in CRYPTO_WATCHLIST:
         key = f"CB_{product_id}"
         if key in open_positions_tracker:
@@ -713,19 +733,26 @@ def scan_crypto():
             smc = get_crypto_smc(product_id)
             if not smc:
                 continue
+            
             ticker = product_id.replace("-EUR","").replace("-USD","")
             news   = get_news_sentiment(ticker)
             if news["pause"]:
                 continue
+            
             signal = get_claude_signal(ticker, smc, news)
             if not signal or signal.get("action") in ["HOLD","SHORT"]:
                 continue
             if signal.get("confidence", 0) < CONFIDENCE_THRESHOLD:
                 continue
+            
             n_conf, conf_list = count_confluences(smc, news["sentiment"], "BUY")
             if n_conf < MIN_CONFLUENCES:
                 continue
-            place_crypto_order(product_id, "buy", usd_size, signal.get("signal_type","SMC"), signal["confidence"], conf_list)
+            
+            place_crypto_order(
+                product_id, "buy", usd_size, 
+                signal.get("signal_type","SMC"), signal["confidence"], conf_list
+            )
             time.sleep(2)
         except Exception as e:
             log.error(f"Crypto scan {product_id}: {e}")
@@ -739,6 +766,7 @@ def check_rebalancing():
         account   = get_account_info()
         hold_cap  = account["equity"] * HOLD_PCT
         positions = {p.symbol: float(p.market_value) for p in trading_client.get_all_positions()}
+        
         for symbol, target in CORE_TARGETS.items():
             target_usd = hold_cap * target
             actual_usd = positions.get(symbol, 0)
@@ -761,6 +789,7 @@ def daily_review():
     trades  = load_trades()
     today   = datetime.now(EST).strftime("%Y-%m-%d")
     t_today = [t for t in trades if t.get("date") == today]
+    
     try:
         account   = get_account_info()
         equity    = account["equity"]
@@ -803,6 +832,7 @@ def daily_review():
         f"{'OK' if t['pnl_usd']>0 else 'LOSS'} *{t['symbol']}* {t['side'].upper()} `{t['pnl_usd']:+.2f}$` [{t['signal']}] ({t.get('platform','?')})"
         for t in t_today
     ]
+    
     send_telegram(
         f"*DAILY REVIEW {today}*\n"
         f"PnL: {pnl_total:+.2f}$ | Portfolio: {day_pct:+.2f}%\n"
@@ -838,6 +868,7 @@ def morning_brief():
         win_rate  = get_win_rate() * 100
         vix_s     = "PANIQUE" if vix > 35 else "VOLATIL" if vix > 25 else "NORMAL"
         _, crypto_val = get_crypto_summary()
+        
         send_telegram(
             f"*MORNING BRIEF*\n"
             f"SPY `{snaps['SPY']:+.2f}%` | QQQ `{snaps['QQQ']:+.2f}%` | IBIT `{snaps['IBIT']:+.2f}%`\n"
@@ -866,11 +897,13 @@ def process_commands():
         )
         if r.status_code != 200:
             return
+        
         for update in r.json().get("result", []):
             last_update_id = update["update_id"]
             msg  = update.get("message", {})
             text = msg.get("text", "").strip().lower()
             chat_id = msg.get("chat", {}).get("id")
+            
             if str(chat_id) != str(TELEGRAM_CHAT_ID):
                 continue
 
