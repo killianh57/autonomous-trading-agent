@@ -578,13 +578,6 @@ def run_trade_scan() -> None:
     if _state.get("paused"):
         return
 
-    now_utc = datetime.now(timezone.utc)
-    hour = now_utc.hour
-
-    # Crypto = 24/7 mais eviter 2h-6h UTC (faible liquidite)
-    if 2 <= hour < 6:
-        return
-
     portfolio_value = get_portfolio_value_eur()
     if check_daily_loss(portfolio_value):
         return
