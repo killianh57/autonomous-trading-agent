@@ -42,8 +42,6 @@ HOLD_PCT = 0.65
 DAYTRADE_PCT = 0.35
 STOCK_SL_PCT = 2.0
 STOCK_TP_PCT = 4.0
-CRYPTO_SL_PCT = 3.0
-CRYPTO_TP_PCT = 6.0
 MAX_RISK_PER_TRADE_PCT = 0.02
 CONFIDENCE_THRESHOLD = 70
 
@@ -71,7 +69,7 @@ def get_coinbase_client():
     return _cb_client
 
 # ================================================================
-# TELEGRAM (SÉCURISÉ & COMPLET)
+# TELEGRAM (FORMATAGE DASHBOARD)
 # ================================================================
 def send_telegram(msg):
     if not TELEGRAM_TOKEN: return
@@ -80,6 +78,33 @@ def send_telegram(msg):
         payload = {"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"}
         requests.post(url, json=payload, timeout=10)
     except Exception as e: log.error(f"❌ Telegram Send Error: {e}")
+
+def get_crypto_summary():
+    """Calcule la valeur totale des cryptos sur Coinbase."""
+    try:
+        cb = get_coinbase_client()
+        if not cb: return "Non configuré", 0
+        accounts = cb.get_accounts()["accounts"]
+        total_eur = 0
+        details = []
+        for acc in accounts:
+            curr = acc["currency"]
+            bal = float(acc["available_balance"]["value"])
+            if bal > 0 and curr != "EUR":
+                prod = f"{curr}-EUR"
+                try:
+                    price = float(cb.get_best_bid_ask(product_ids=[prod])["pricebooks"][0]["bids"][0]["price"])
+                    val = bal * price
+                    total_eur += val
+                    details.append(f"🔹 {curr}: {bal:.4f} (~{val:.2f}€)")
+                except: continue
+            elif curr == "EUR":
+                total_eur += bal # On peut ajouter le cash EUR au total ou le séparer
+        
+        summary = "\n".join(details) if details else "Aucun actif crypto"
+        return summary, total_eur
+    except Exception as e:
+        return f"Erreur: {e}", 0
 
 def process_commands():
     global last_update_id, agent_paused
@@ -99,40 +124,69 @@ def process_commands():
             if str(chat_id) != str(TELEGRAM_CHAT_ID): continue
 
             if text == "/start" or text == "/aide":
-                send_telegram("🤖 *Agent V11 ULTIME - Commandes:*\n/status - État du compte\n/positions - Trades ouverts\n/marche - Snapshots Marché\n/pause - Suspendre trading\n/resume - Reprendre trading\n/liquidate - Vendre cryptos pour cash\n/report - Bilan rapide")
+                send_telegram("🤖 *AGENT V11 ULTIME*\n\n"
+                              "📊 *INFOS*\n/status - État global\n/portfolio - Bilan Bourse + Crypto\n/crypto - Détail Crypto\n/marche - État du marché\n\n"
+                              "⚙️ *CONTRÔLE*\n/pause - Suspendre trading\n/resume - Reprendre trading\n/liquidate - Vendre cryptos\n\n"
+                              "📋 *AUTRES*\n/positions - Trades ouverts\n/report - Bilan rapide")
+            
             elif text == "/status":
-                try:
-                    acc = trading_client.get_account()
-                    send_telegram(f"📊 *STATUS V11*\nEquity: {acc.equity}$\nMode: {'PAPER' if PAPER_MODE else 'LIVE'}\nPaused: {agent_paused}")
-                except Exception as e: send_telegram(f"❌ Erreur status: {e}")
+                acc = trading_client.get_account()
+                msg = (f"📊 *STATUS SYSTÈME*\n\n"
+                       f"💰 Equity: `{acc.equity}$`\n"
+                       f"💵 Cash: `{acc.cash}$`\n\n"
+                       f"🛠 Mode: `{ 'PAPER' if PAPER_MODE else 'LIVE' }`\n"
+                       f"⏸️ Pause: `{'OUI' if agent_paused else 'NON'}`")
+                send_telegram(msg)
+
+            elif text == "/portfolio":
+                # Bourse
+                acc = trading_client.get_account()
+                # Crypto
+                crypto_details, crypto_val = get_crypto_summary()
+                
+                msg = (f"💰 *BILAN GLOBAL DU PORTEFEUILLE*\n\n"
+                       f"📈 *BOURSE (Alpaca)*\n"
+                       f"Valeur: `{acc.equity}$`\n"
+                       f"Cash: `{acc.cash}$`\n\n"
+                       f"🪙 *CRYPTO (Coinbase)*\n"
+                       f"Valeur estimée: `{crypto_val:.2f}€`\n"
+                       f"Détails: \n{crypto_details}\n\n"
+                       f"━━━━━━━━━━━━━━━━━━\n"
+                       f"🚀 *SANTÉ DU SYSTÈME: OK*")
+                send_telegram(msg)
+
+            elif text == "/crypto":
+                details, total = get_crypto_summary()
+                msg = (f"🪙 *DÉTAIL CRYPTO COINBASE*\n\n"
+                       f"{details}\n\n"
+                       f"━━━━━━━━━━━━━━━━━━\n"
+                       f"💰 *VALEUR TOTALE: {total:.2f}€*")
+                send_telegram(msg)
+
             elif text == "/positions":
-                try:
-                    pos = trading_client.get_all_positions()
-                    if not pos: 
-                        send_telegram("Aucune position ouverte.")
-                        continue
-                    lines = [f"🔹 {p.symbol}: {p.unrealized_plpc}%" for p in pos]
-                    send_telegram("📉 *POSITIONS ACTIVES:*\n" + "\n".join(lines))
-                except Exception as e: send_telegram(f"❌ Erreur pos: {e}")
+                pos = trading_client.get_all_positions()
+                if not pos: 
+                    send_telegram("❌ Aucune position ouverte.")
+                else:
+                    lines = [f"🔹 {p.symbol}: `{p.unrealized_plpc:.2f}%`" for p in pos]
+                    send_telegram("📉 *POSITIONS ACTIVES:*\n\n" + "\n".join(lines))
+
             elif text == "/marche":
-                try:
-                    snaps = data_client.get_stock_snapshot(StockSnapshotRequest(symbol_or_symbols=["SPY", "QQQ", "IBIT"]))
-                    lines = [f"{s}: {snaps[s].daily_bar.percent_change:.2f}%" for s in ["SPY", "QQQ", "IBIT"]]
-                    send_telegram("🌐 *MARCHÉ:*\n" + "\n".join(lines))
-                except Exception as e: send_telegram(f"❌ Erreur marche: {e}")
+                snaps = data_client.get_stock_snapshot(StockSnapshotRequest(symbol_or_symbols=["SPY", "QQQ", "IBIT"]))
+                lines = [f"🔹 {s}: `{snaps[s].daily_bar.percent_change:.2f}%`" for s in ["SPY", "QQQ", "IBIT"]]
+                send_telegram("🌐 *MARKET SNAPSHOT:*\n\n" + "\n".join(lines))
+
             elif text == "/pause":
                 agent_paused = True
-                send_telegram("⏸️ *Agent en PAUSE*")
+                send_telegram("⏸️ *Agent mis en PAUSE*\nL'ouverture de nouveaux trades est suspendue.")
             elif text == "/resume":
                 agent_paused = False
-                send_telegram("▶️ *Agent REPRIS*")
+                send_telegram("▶️ *Agent REPRIS*\nLe scan des marchés est réactivé.")
             elif text == "/liquidate":
                 liquidate_crypto_for_cash()
             elif text == "/report":
-                try:
-                    acc = trading_client.get_account()
-                    send_telegram(f"📋 *RAPPORT RAPIDE*\nEquity: {acc.equity}$\nCash: {acc.cash}$")
-                except Exception as e: send_telegram(f"❌ Erreur report: {e}")
+                acc = trading_client.get_account()
+                send_telegram(f"📋 *RAPPORT RAPIDE*\n\n💰 Equity: `{acc.equity}$`\n💵 Cash: `{acc.cash}$`")
 
     except Exception as e: log.error(f"❌ Telegram Loop Error: {e}")
 
@@ -143,7 +197,7 @@ def telegram_loop():
         time.sleep(5)
 
 # ================================================================
-# TRADING CORE (ACTIONS & CRYPTO)
+# TRADING CORE (SMC & EXECUTION)
 # ================================================================
 def get_account_info():
     a = trading_client.get_account()
@@ -165,11 +219,10 @@ def place_bracket_order(symbol, side, limit_price, sl_pct, tp_pct):
             req = LimitOrderRequest(symbol=symbol, qty=qty, side=OrderSide.SELL, time_in_force=TimeInForce.DAY, limit_price=round(limit_price, 2), order_class=OrderClass.BRACKET, take_profit=TakeProfitRequest(limit_price=round(tp_p, 2)), stop_loss=StopLossRequest(stop_price=round(sl_p, 2)))
         
         trading_client.submit_order(req)
-        send_telegram(f"🚀 *TRADE {symbol}* {side.upper()}\nEntry: {limit_price}$ | SL: {sl_p:.2f} | TP: {tp_p:.2f}")
+        send_telegram(f"🚀 *NOUVEAU TRADE : {symbol}* {side.upper()}\n\n🎯 Entrée: `{limit_price}$`\n🛑 SL: `{sl_p:.2f}$`\n✅ TP: `{tp_p:.2f}$`")
     except Exception as e: log.error(f"Order Error: {e}")
 
 def liquidate_crypto_for_cash():
-    """Vendre les fonds crypto existants pour créer du cash de trading."""
     try:
         cb = get_coinbase_client()
         if not cb: return
@@ -181,12 +234,11 @@ def liquidate_crypto_for_cash():
             if balance > 0 and currency not in ["EUR", "USD"]:
                 product_id = f"{currency}-EUR"
                 if product_id in CRYPTO_WATCHLIST:
-                    order_id = str(uuid.uuid4())
-                    cb.market_order_sell(client_order_id=order_id, product_id=product_id, base_size=str(balance))
+                    cb.market_order_sell(client_order_id=str(uuid.uuid4()), product_id=product_id, base_size=str(balance))
                     sold_list.append(f"{currency} ({balance})")
         
         if sold_list:
-            send_telegram(f"💰 *LIQUIDATION CRYPTO*\nFonds vendus pour cash: {', '.join(sold_list)}")
+            send_telegram(f"💰 *LIQUIDATION CRYPTO*\n\nFonds vendus pour cash: {', '.join(sold_list)}")
         else:
             send_telegram("❌ Aucun fonds crypto disponible à vendre.")
     except Exception as e:
@@ -208,7 +260,7 @@ def scan_crypto():
             if signal.get("confidence", 0) >= CONFIDENCE_THRESHOLD and signal["action"] == "BUY":
                 usd_size = get_account_info()["equity"] * 0.02
                 cb.market_order_buy(client_order_id=str(uuid.uuid4()), product_id=product_id, quote_size=str(round(usd_size, 2)))
-                send_telegram(f"🪙 *BUY CRYPTO {product_id}* @ {price}$\nConfiance: {signal['confidence']}%")
+                send_telegram(f"🪙 *BUY CRYPTO {product_id}*\n\nPrix: `{price}$`\nConfiance: `{signal['confidence']}%`")
             time.sleep(1)
     except Exception as e: log.error(f"Crypto Scan Error: {e}")
 
@@ -224,7 +276,7 @@ def check_rebalancing():
                 buy_amt = target_usd - actual_usd
                 if account["cash"] > buy_amt:
                     trading_client.submit_order(MarketOrderRequest(symbol=symbol, notional=round(buy_amt, 2), side=OrderSide.BUY, time_in_force=TimeInForce.DAY))
-                    send_telegram(f"⚖️ REBALANCING: Achat {symbol} {buy_amt:.2f}$")
+                    send_telegram(f"⚖️ *REBALANCING*\n\nSoutien de l'actif: `{symbol}`\nMontant: `{buy_amt:.2f}$`")
     except Exception as e: log.error(f"Rebalance Error: {e}")
 
 def scan_and_trade():
@@ -254,7 +306,7 @@ class _Health(BaseHTTPRequestHandler):
     def log_message(self, *args): pass
 
 if __name__ == "__main__":
-    log.info("🚀 AGENT V11 ULTIME (ACTIONS + CRYPTO) DEMARRAGE...")
+    log.info("🚀 AGENT V11 ULTIME DASHBOARD DEMARRAGE...")
     
     threading.Thread(target=lambda: HTTPServer(("0.0.0.0", int(os.getenv("PORT", 8080))), _Health).serve_forever(), daemon=True).start()
     threading.Thread(target=telegram_loop, daemon=True).start()
@@ -263,7 +315,7 @@ if __name__ == "__main__":
     schedule.every(30).minutes.do(scan_crypto)
     schedule.every().day.at("10:00").do(check_rebalancing)
 
-    send_telegram("🤖 *Agent V11 ULTIME en ligne !*\nActions + Crypto actives.\nTapez /aide pour les commandes.")
+    send_telegram("🤖 *Agent V11 ULTIME en ligne !*\n\nL'oreille est active. Tapez /portfolio pour voir vos actifs ou /aide pour les commandes.")
     
     while True:
         schedule.run_pending()
