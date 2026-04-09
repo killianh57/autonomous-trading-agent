@@ -19,7 +19,7 @@ import schedule
 from dotenv import load_dotenv
 from flask import Flask
 
-load_dotenv("/etc/secrets/.env")
+load_dotenv()
 
 # ---------------------------------------------------------------------------
 # LOGGING
