@@ -13,7 +13,7 @@ from alpaca.trading.requests import (
 from alpaca.trading.enums import OrderSide, TimeInForce, OrderClass
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest, StockSnapshotRequest, StockLatestBarRequest
-from alpaca.data.timeframe import TimeFrame
+from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 
 try:
     from coinbase.rest import RESTClient as CoinbaseClient
@@ -312,7 +312,7 @@ def scan_and_trade():
         try:
             req = StockBarsRequest(
                 symbol_or_symbols=ticker,
-                timeframe=TimeFrame.Minute5,
+                timeframe=TimeFrame(5, TimeFrameUnit.Minute),
                 start=datetime.now(EST) - timedelta(days=1)
             )
             bars = list(data_client.get_stock_bars(req)[ticker])
