@@ -122,7 +122,7 @@ def _cb_headers(method, path, body=""):
         "iss": "cdp",
         "nbf": int(time.time()),
         "exp": int(time.time()) + 120,
-        "uri": method.upper() + " api.coinbase.com" + path,
+        "uri": method.upper() + " api.coinbase.com" + path.split("?")[0],
     }
     private_key = load_pem_private_key(key_secret.encode(), password=None)
     token = jwt.encode(payload, private_key, algorithm="ES256",
