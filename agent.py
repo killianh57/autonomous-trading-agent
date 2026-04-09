@@ -974,7 +974,6 @@ if __name__ == "__main__":
     schedule.every(5).minutes.do(scan_and_trade)
     schedule.every(5).minutes.do(scan_crypto)
     schedule.every(1).minutes.do(check_crypto_sl_tp)
-    schedule.every(1).minutes.do(process_commands)
     schedule.every().day.at("09:00").do(morning_brief)
     schedule.every().day.at("16:30").do(daily_review)
     schedule.every().day.at("10:00").do(check_rebalancing)
@@ -986,6 +985,15 @@ if __name__ == "__main__":
         f"Scan 5min | Confidence >= {CONFIDENCE_THRESHOLD} | {MIN_CONFLUENCES} confluences min\n"
         f"/aide pour les commandes"
     )
+
+    # --- VOIE RAPIDE TELEGRAM ---
+    def telegram_loop():
+        while True:
+            process_commands()
+            time.sleep(2)
+            
+    threading.Thread(target=telegram_loop, daemon=True).start()
+    # ----------------------------
 
     while True:
         schedule.run_pending()
