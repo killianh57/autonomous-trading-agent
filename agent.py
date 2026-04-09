@@ -5,7 +5,7 @@ AGENT TRADING IA V10 — BASE V9 + TOUTES AMÉLIORATIONS
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Architecture :
 Alpaca   -> Stocks (NVDA, TSLA, AAPL, META, MSFT) + ETFs Core-Satellite
-Coinbase -> Crypto direct (BTC-EUR, ETH-EUR)
+Coinbase -> Crypto direct (BTC-EUR, ETH-EUR, etc.)
 
 V9 conservé : Coinbase RESTClient, bracket orders, SMC, ATR sizing, allocation HOLD/DAYTRADE
 V10 ajouté  : EMA 9/21, RSI divergence, volume filter, VIX filter, blackout 11h-14h,
@@ -74,12 +74,12 @@ STOCK_TP_PCT           = 4.0
 CRYPTO_SL_PCT          = 3.0
 CRYPTO_TP_PCT          = 6.0
 MAX_RISK_PER_TRADE_PCT = 0.02
-CONFIDENCE_THRESHOLD   = 80      # FIXE - jamais adaptatif
-MIN_CONFLUENCES        = 3
+CONFIDENCE_THRESHOLD   = 70      # IA autorisée à proposer des trades dès 70% de certitude
+MIN_CONFLUENCES        = 1       # Au moins 1 indicateur technique (Veto validé)
 
-# Watchlists - CORRECTION: Paires en EUR
+# Watchlists - CORRECTION: 7 Paires en EUR
 STOCK_WATCHLIST  = ["NVDA", "TSLA", "AAPL", "META", "MSFT"]
-CRYPTO_WATCHLIST = ["BTC-EUR", "ETH-EUR"]
+CRYPTO_WATCHLIST = ["BTC-EUR", "ETH-EUR", "SOL-EUR", "XRP-EUR", "AVAX-EUR", "LINK-EUR", "ADA-EUR"]
 
 # Core-Satellite targets pour rebalancing
 CORE_TARGETS = {"VT": 0.40, "SCHD": 0.15, "VNQ": 0.05, "QQQ": 0.15, "IBIT": 0.10}
@@ -326,25 +326,38 @@ def get_news_sentiment(ticker):
         return {"sentiment": "NEUTRAL", "pause": False, "reason": ""}
 
 # ================================================================
-# MULTI-CONFLUENCE
+# MULTI-CONFLUENCE AVEC VETO STRICT
 # ================================================================
 
 def count_confluences(smc, news_sentiment, direction):
     c = []
+    
     if direction == "BUY":
-        if smc.get("ema_bullish"):         c.append("EMA9>EMA21")
+        # ⛔ VETO : Interdit d'acheter si la tendance de fond est baissière
+        if not smc.get("ema_bullish"): 
+            return 0, ["Veto: Tendance baissière (EMA9 < EMA21)"]
+
+        # ✅ Si le veto est passé, on compte les confluences
+        c.append("EMA9>EMA21 (Tendance OK)")
         if smc.get("sweep_bullish"):       c.append("Sweep bull")
         if smc.get("rsi_div_bull"):        c.append("RSI div bull")
         if smc.get("volume_ok"):           c.append("Volume OK")
         if news_sentiment == "BULLISH":    c.append("News bull")
         if smc.get("trend") == "haussier": c.append("Trend haussier")
-    else:
-        if not smc.get("ema_bullish"):     c.append("EMA9<EMA21")
+
+    else: 
+        # ⛔ VETO : Interdit de shorter si la tendance de fond est haussière
+        if smc.get("ema_bullish"): 
+            return 0, ["Veto: Tendance haussière (EMA9 > EMA21)"]
+
+        # ✅ Si le veto est passé, on compte les confluences
+        c.append("EMA9<EMA21 (Tendance OK)")
         if smc.get("sweep_bearish"):       c.append("Sweep bear")
         if smc.get("rsi_div_bear"):        c.append("RSI div bear")
         if smc.get("volume_ok"):           c.append("Volume OK")
         if news_sentiment == "BEARISH":    c.append("News bear")
         if smc.get("trend") == "baissier": c.append("Trend baissier")
+
     return len(c), c
 
 # ================================================================
@@ -563,7 +576,7 @@ PROMPT_SYSTEM = (
     "Reponds UNIQUEMENT en JSON strict :\n"
     '{"action":"BUY"|"SHORT"|"HOLD","confidence":0-100,'
     '"signal_type":"SMC"|"SMC+RSI"|"SMC+EMA"|"SMC+RSI+EMA","reason":"max 10 mots"}\n'
-    "Si confidence < 80 -> action HOLD obligatoire."
+    "Si confidence < 70 -> action HOLD obligatoire."
 )
 
 def get_claude_signal(ticker, smc, news):
