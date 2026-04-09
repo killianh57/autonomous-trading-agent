@@ -1,0 +1,28 @@
+[
+  {
+    "timestamp": "2026-04-09T00:00:00+00:00",
+    "product_id": "BTC-EUR",
+    "direction": "LONG",
+    "trade_eur": 3.94,
+    "entry": 61664.46,
+    "sl": 58131.0,
+    "tp": 67731.0,
+    "confidence": 80,
+    "rr": 2.0,
+    "reasons": ["position existante importee manuellement"],
+    "status": "open"
+  },
+  {
+    "timestamp": "2026-04-09T00:00:00+00:00",
+    "product_id": "ETH-EUR",
+    "direction": "LONG",
+    "trade_eur": 12.79,
+    "entry": 1929.13,
+    "sl": 1814.0,
+    "tp": 2159.0,
+    "confidence": 80,
+    "rr": 2.0,
+    "reasons": ["position existante importee manuellement"],
+    "status": "open"
+  }
+]
