@@ -1,8 +1,4 @@
-alpaca-py
-anthropic
-schedule
-requests
-python-dotenv
-coinbase-advanced-py
-pytz
-newsapi-python
+requests==2.32.3
+python-dotenv==1.0.1
+schedule==1.2.2
+flask==3.1.0
