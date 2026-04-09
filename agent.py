@@ -1,39 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# “””
-AGENT TRADING IA V12 - FUSION COMPLETE V11 + V10
-
-Base V11 (ton fichier) :
-
-- Dashboard Telegram complet (/portfolio, /crypto, /liquidate)
-- get_crypto_summary() valeur Coinbase en EUR temps reel
-- Crypto EUR (BTC-EUR, ETH-EUR, SOL-EUR, XRP-EUR, AVAX-EUR, LINK-EUR, ADA-EUR)
-- liquidate_crypto_for_cash()
-- telegram_loop() thread separe
-- Rebalancing execute des ordres reels
-
-Ajouts V10 :
-
-- SMC intraday : swing high/low + liquidity sweep
-- EMA 9/21 filter
-- RSI divergence bull/bear
-- Volume filter (> 80% moyenne 20j)
-- VIX macro filter (pause si > 35)
-- Blackout 11h-14h EST (bruit institutionnel)
-- News sentiment NewsAPI + pause auto si risque
-- Multi-confluence (3 minimum pour setup A+)
-- ATR + Kelly demi-conservateur sizing
-- Trade logger JSON local + sync Notion
-- Daily review 16h30 EST avec regle du lendemain
-- Morning brief 9h EST
-- /trades historique avec ratio OK/LOSS
-
-Corrections :
-
-- CONFIDENCE_THRESHOLD = 80 (FIXE)
-- model = claude-haiku-4-5-20251001
-- Health server Render
-  “””
+# Agent Trading V12 - Alpaca + Coinbase
 
 import os, json, time, threading, logging, uuid
 from datetime import datetime, timedelta, timezone
