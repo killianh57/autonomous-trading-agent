@@ -566,6 +566,32 @@ def startup_audit() -> None:
     if total_eur < MIN_CAPITAL_EUR:
         lines.append("ATTENTION: capital < {:.0f} EUR - mode lecture seule".format(MIN_CAPITAL_EUR))
 
+    import os as _os
+    if _os.path.exists("crypto_trades.json"):
+        try:
+            with open("crypto_trades.json", "r") as f:
+                trades = json.load(f)
+            for t in trades:
+                if t.get("status") == "open":
+                    mint = t.get("product_id")
+                    if mint and mint not in _state["active_positions"]:
+                        _state["active_positions"][mint] = {
+                            "mint": mint,
+                            "name": mint,
+                            "symbol": mint.split("-")[0],
+                            "entry_time": t.get("timestamp"),
+                            "sol_spent": t.get("trade_eur", 0),
+                            "tokens_bought": t.get("trade_eur", 0),
+                            "entry_price": t.get("entry", 0),
+                            "sl": t.get("sl", 0),
+                            "tp": t.get("tp", 0),
+                            "tx_sig": "imported",
+                        }
+                        log.info("Position importee: %s entry=%s", mint, t.get("entry"))
+            save_state()
+        except Exception as e:
+            log.error("Import trades error: %s", e)
+
     msg = "\n".join(lines)
     log.info(msg)
     send_telegram(msg)
