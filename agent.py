@@ -852,6 +852,7 @@ def _handle_command(text: str, chat_id) -> None:
             "/crypto_pause    - Pause trading\n"
             "/crypto_resume   - Reprendre\n"
             "/crypto_urgence  - Fermer toutes positions trade\n"
+            "/crypto_test     - Test achat+vente 2 EUR BTC\n"
             "/aide            - Aide"
         )
     elif text == "/crypto_status":
@@ -923,6 +924,24 @@ def _handle_command(text: str, chat_id) -> None:
                     if order:
                         closed += 1
         reply = "Urgence: {} positions TRADE fermees".format(closed)
+    elif text == "/crypto_test":
+        reply = "Test trade: achat 2 EUR BTC-EUR..."
+        requests.post(
+            "https://api.telegram.org/bot{}/sendMessage".format(TELEGRAM_TOKEN),
+            json={"chat_id": chat_id, "text": reply},
+            timeout=10,
+        )
+        buy = place_market_buy("BTC-EUR", 2.0)
+        if not buy:
+            reply = "Test ECHOUE: achat BTC-EUR impossible (voir logs)"
+        else:
+            import time as _time
+            _time.sleep(3)
+            sell = place_market_sell_full("BTC-EUR")
+            if sell:
+                reply = "Test OK: achat + vente BTC-EUR executes avec succes"
+            else:
+                reply = "Test PARTIEL: achat OK mais vente echouee (verifier position)"
     else:
         return
 
