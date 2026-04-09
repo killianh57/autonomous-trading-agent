@@ -4,9 +4,4 @@ schedule
 requests
 python-dotenv
 coinbase-advanced-py
-pytzalpaca-py
-anthropic
-schedule
-requests
-python-dotenv
-coinbase-advanced-py
+pytz
