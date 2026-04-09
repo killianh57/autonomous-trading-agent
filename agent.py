@@ -75,6 +75,7 @@ _state = {
     "paused": False,
     "daily_start_value": 0.0,
     "daily_loss_alerted": False,
+    "active_positions": {},
 }
 
 def load_state() -> None:
