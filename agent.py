@@ -173,7 +173,22 @@ def process_commands():
 
             elif text == "/marche":
                 snaps = data_client.get_stock_snapshot(StockSnapshotRequest(symbol_or_symbols=["SPY", "QQQ", "IBIT"]))
-                lines = [f"🔹 {s}: `{snaps[s].daily_bar.percent_change:.2f}%`" for s in ["SPY", "QQQ", "IBIT"]]
+                lines = []
+                for s in ["SPY", "QQQ", "IBIT"]:
+                    snap = snaps[s]
+                    try:
+                        # Variation classique : (Clôture aujourd'hui - Clôture veille) / Clôture veille
+                        pct_change = ((snap.daily_bar.close - snap.previous_daily_bar.close) / snap.previous_daily_bar.close) * 100
+                    except (AttributeError, ZeroDivisionError, TypeError):
+                        # Solution de secours (intraday) si les données de la veille sont manquantes
+                        try:
+                            pct_change = ((snap.daily_bar.close - snap.daily_bar.open) / snap.daily_bar.open) * 100
+                        except:
+                            pct_change = 0.0
+                    
+                    # Le + dans {pct_change:+.2f} permet d'afficher automatiquement le signe + ou -
+                    lines.append(f"🔹 {s}: `{pct_change:+.2f}%`")
+                
                 send_telegram("🌐 *MARKET SNAPSHOT:*\n\n" + "\n".join(lines))
 
             elif text == "/pause":
