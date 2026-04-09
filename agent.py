@@ -9,6 +9,9 @@ Capital   : reel, petit (debut 40-100 EUR)
 import os
 import json
 import time
+import uuid
+import jwt
+from cryptography.hazmat.primitives.serialization import load_pem_private_key
 import hmac
 import hashlib
 import logging
@@ -21,7 +24,7 @@ import schedule
 from dotenv import load_dotenv
 from flask import Flask
 
-load_dotenv()
+load_dotenv("/etc/secrets/.env")
 
 # ---------------------------------------------------------------------------
 # LOGGING
@@ -111,20 +114,21 @@ def send_telegram(msg: str) -> None:
 # ---------------------------------------------------------------------------
 CB_BASE_URL = "https://api.coinbase.com"
 
-def _cb_headers(method: str, path: str, body: str = "") -> dict:
-    timestamp = str(int(time.time()))
-    message = timestamp + method.upper() + path + body
-    signature = hmac.new(
-        CB_API_SECRET.encode("utf-8"),
-        message.encode("utf-8"),
-        digestmod=hashlib.sha256,
-    ).hexdigest()
-    return {
-        "CB-ACCESS-KEY":       CB_API_KEY,
-        "CB-ACCESS-SIGN":      signature,
-        "CB-ACCESS-TIMESTAMP": timestamp,
-        "Content-Type":        "application/json",
+def _cb_headers(method, path, body=""):
+    key_name = CB_API_KEY
+    key_secret = CB_API_SECRET.replace("\\n", "\n")
+    payload = {
+        "sub": key_name,
+        "iss": "cdp",
+        "nbf": int(time.time()),
+        "exp": int(time.time()) + 120,
+        "uri": method.upper() + " api.coinbase.com" + path,
     }
+    private_key = load_pem_private_key(key_secret.encode(), password=None)
+    token = jwt.encode(payload, private_key, algorithm="ES256",
+                       headers={"kid": key_name, "nonce": uuid.uuid4().hex})
+    return {"Authorization": "Bearer " + token,
+            "Content-Type": "application/json"}
 
 def cb_get(path: str) -> Optional[dict]:
     try:
