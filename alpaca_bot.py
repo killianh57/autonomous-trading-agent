@@ -19,7 +19,7 @@ import schedule
 from dotenv import load_dotenv
 from flask import Flask
 
-load_dotenv()
+load_dotenv("/etc/secrets/.env")
 
 # ---------------------------------------------------------------------------
 # LOGGING
@@ -35,7 +35,7 @@ log = logging.getLogger("alpaca_bot")
 # CONFIG
 # ---------------------------------------------------------------------------
 ALPACA_API_KEY    = os.getenv("ALPACA_API_KEY", "")
-ALPACA_API_SECRET = os.getenv("ALPACA_API_SECRET", "")
+ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY", "")
 ALPACA_PAPER      = os.getenv("ALPACA_PAPER", "true").lower() == "true"
 TELEGRAM_TOKEN    = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID  = os.getenv("TELEGRAM_CHAT_ID", "")
@@ -44,23 +44,22 @@ PORT = int(os.getenv("PORT", "10001"))
 TRADE_BASE_URL = "https://paper-api.alpaca.markets" if ALPACA_PAPER else "https://api.alpaca.markets"
 DATA_BASE_URL  = "https://data.alpaca.markets"
 
-HOLD_ASSETS  = ["AAPL", "MSFT", "GOOGL"]
-TRADE_ASSETS = ["SPY", "QQQ"]
+HOLD_ASSETS  = ["VT", "SCHD", "VNQ"]
+TRADE_ASSETS = ["QQQ", "IBIT"]
 ALL_ASSETS   = HOLD_ASSETS + TRADE_ASSETS
 
 HOLD_ALLOCATION = {
-    "AAPL":  0.30,
-    "MSFT":  0.20,
-    "GOOGL": 0.15,
+    "VT":   0.40,
+    "SCHD": 0.15,
+    "VNQ":  0.05,
 }
 
-# Limites de risque
+HOLD_STOP_LOSS_PCT = -0.30
 MIN_CAPITAL_USD    = 10.0
 MAX_TRADE_PCT      = 0.10
 CONFIDENCE_MIN     = 80
 RR_MIN             = 2.0
 DAILY_LOSS_LIMIT   = -0.05
-HOLD_STOP_LOSS_PCT = -0.30
 
 TRADE_LOG_FILE = "alpaca_trades.json"
 STATE_FILE     = "alpaca_state.json"
@@ -115,7 +114,7 @@ def send_telegram(msg: str) -> None:
 def _headers() -> dict:
     return {
         "APCA-API-KEY-ID":     ALPACA_API_KEY,
-        "APCA-API-SECRET-KEY": ALPACA_API_SECRET,
+        "APCA-API-SECRET-KEY": ALPACA_SECRET_KEY,
         "Content-Type":        "application/json",
     }
 
@@ -841,8 +840,8 @@ def main() -> None:
     log.info("Alpaca Bot V1 demarrage...")
     load_state()
 
-    if not ALPACA_API_KEY or not ALPACA_API_SECRET:
-        log.error("ALPACA_API_KEY ou ALPACA_API_SECRET manquant")
+    if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
+        log.error("ALPACA_API_KEY ou ALPACA_SECRET_KEY manquant")
         return
 
     log.info("Config: KEY=%s... PAPER=%s TELEGRAM=%s CHAT=%s",
