@@ -60,7 +60,7 @@ HOLD_ALLOCATION = {
 MIN_CAPITAL_EUR    = 5.0    # Sous ce seuil : lecture seule, zero ordre
 MAX_TRADE_PCT      = 0.25   # Max 25% du capital par trade
 CONFIDENCE_MIN     = 50     # Score minimum pour entrer
-RR_MIN             = 2.0    # Risk/Reward minimum
+RR_MIN             = 1.5    # Risk/Reward minimum
 DAILY_LOSS_LIMIT   = -0.05  # -5% sur la journee : pause auto
 SPREAD_MAX_PCT     = 0.005  # Spread > 0.5% : skip (marche illiquide)
 HOLD_STOP_LOSS_PCT = -0.30  # Stop catastrophique hold assets : -30%
@@ -627,8 +627,10 @@ def run_trade_scan() -> None:
         )
 
         if signal["direction"] != "LONG":
+            log.info("Skip %s: direction=%s conf=%d", pid, signal["direction"], signal["confidence"])
             continue
         if signal["confidence"] < CONFIDENCE_MIN:
+            log.info("Skip %s: conf=%d < %d", pid, signal["confidence"], CONFIDENCE_MIN)
             continue
 
         entry = signal["entry"]
@@ -636,12 +638,12 @@ def run_trade_scan() -> None:
         tp    = signal["tp"]
 
         if sl <= 0 or tp <= 0 or sl >= entry:
-            log.info("SL/TP invalide pour %s, skip", pid)
+            log.info("SL/TP invalide pour %s: sl=%.4f tp=%.4f entry=%.4f", pid, sl, tp, entry)
             continue
 
         rr = (tp - entry) / (entry - sl)
         if rr < RR_MIN:
-            log.info("RR %.2f < %.1f pour %s, skip", rr, RR_MIN, pid)
+            log.info("Skip %s: RR=%.3f < %.1f", pid, rr, RR_MIN)
             continue
 
         # Taille de position
