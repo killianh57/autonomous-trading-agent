@@ -46,7 +46,7 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 PORT = int(os.getenv("PORT", "10000"))
 
 HOLD_ASSETS  = ["SOL-EUR", "AVAX-EUR", "LINK-EUR"]
-TRADE_ASSETS = ["BTC-EUR", "ETH-EUR"]
+TRADE_ASSETS = ["BTC-EUR", "ETH-EUR", "XRP-EUR", "ADA-EUR"]
 ALL_ASSETS   = HOLD_ASSETS + TRADE_ASSETS
 
 # Allocations cibles en % du capital total crypto
@@ -59,7 +59,7 @@ HOLD_ALLOCATION = {
 # Limites de risque
 MIN_CAPITAL_EUR    = 5.0    # Sous ce seuil : lecture seule, zero ordre
 MAX_TRADE_PCT      = 0.10   # Max 10% du capital par trade
-CONFIDENCE_MIN     = 60     # Score minimum pour entrer
+CONFIDENCE_MIN     = 50     # Score minimum pour entrer
 RR_MIN             = 2.0    # Risk/Reward minimum
 DAILY_LOSS_LIMIT   = -0.05  # -5% sur la journee : pause auto
 SPREAD_MAX_PCT     = 0.005  # Spread > 0.5% : skip (marche illiquide)
@@ -378,7 +378,7 @@ def analyze(product_id: str) -> dict:
     bear_count = sum(1 for r in reasons if any(w in r for w in ["bearish", "overbought", "death", "LL"]))
 
     abs_score = abs(score)
-    if bull_count >= 3 and score >= CONFIDENCE_MIN:
+    if bull_count >= 2 and score >= CONFIDENCE_MIN:
         result["direction"]  = "LONG"
         result["confidence"] = min(score, 100)
     elif bear_count >= 3 and abs_score >= CONFIDENCE_MIN:
