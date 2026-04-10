@@ -406,7 +406,7 @@ def has_position(product_id: str) -> bool:
     coin = product_id.split("-")[0]
     balances = get_accounts()
     qty = balances.get(coin, 0.0)
-    return qty > 0.0001
+    return qty > 0.000001
 
 def get_position_qty(product_id: str) -> float:
     coin = product_id.split("-")[0]
@@ -978,13 +978,17 @@ def _handle_command(text: str, chat_id) -> None:
         reply = "Trading crypto repris"
     elif text == "/crypto_urgence":
         closed = 0
-        for pid in TRADE_ASSETS:
-            if has_position(pid):
-                if not is_hold_asset(pid):
-                    order = place_market_sell_full(pid)
-                    if order:
-                        closed += 1
-        reply = "Urgence: {} positions TRADE fermees".format(closed)
+        balances = get_accounts()
+        for coin, qty in balances.items():
+            if qty <= 0.000001 or coin == "EUR":
+                continue
+            pid = "{}-EUR".format(coin)
+            if is_hold_asset(pid):
+                continue
+            order = place_market_sell_full(pid)
+            if order:
+                closed += 1
+        reply = "Urgence: {} positions fermees".format(closed)
     elif text == "/crypto_test":
         reply = "Test trade: achat 2 EUR BTC-EUR..."
         requests.post(
