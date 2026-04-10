@@ -977,13 +977,12 @@ def _handle_command(text: str, chat_id) -> None:
         if not buy:
             reply = "Test ECHOUE: achat BTC-EUR impossible (voir logs)"
         else:
-            import time as _time
-            _time.sleep(3)
+            time.sleep(10)
             sell = place_market_sell_full("BTC-EUR")
             if sell:
                 reply = "Test OK: achat + vente BTC-EUR executes avec succes"
             else:
-                reply = "Test PARTIEL: achat OK mais vente echouee (verifier position)"
+                reply = "Test PARTIEL: achat OK mais vente echouee - BTC recu, vends manuellement"
     else:
         return
 
