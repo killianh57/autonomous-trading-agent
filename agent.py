@@ -997,7 +997,7 @@ def run_health_server() -> None:
 # ---------------------------------------------------------------------------
 def setup_scheduler() -> None:
     schedule.every().day.at("08:00").do(morning_brief)
-    schedule.every(15).minutes.do(run_trade_scan)
+    schedule.every(5).minutes.do(run_trade_scan)
     schedule.every(60).minutes.do(monitor_hold_assets)
     schedule.every(5).seconds.do(poll_telegram_commands)
     log.info("Scheduler configure")
@@ -1026,6 +1026,9 @@ def main() -> None:
 
     # Scheduler
     setup_scheduler()
+
+    # Scan immediat au demarrage
+    run_trade_scan()
 
     # Loop principale
     while True:
