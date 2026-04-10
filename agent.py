@@ -859,6 +859,25 @@ def morning_brief() -> None:
 # ---------------------------------------------------------------------------
 _last_update_id = 0
 
+def init_telegram_offset() -> None:
+    """Au demarrage, ignorer tous les messages deja en attente."""
+    global _last_update_id
+    if not TELEGRAM_TOKEN:
+        return
+    try:
+        resp = requests.get(
+            "https://api.telegram.org/bot{}/getUpdates".format(TELEGRAM_TOKEN),
+            params={"offset": -1},
+            timeout=10,
+        )
+        if resp.ok:
+            results = resp.json().get("result", [])
+            if results:
+                _last_update_id = results[-1]["update_id"]
+                log.info("Telegram offset initialise: %d", _last_update_id)
+    except Exception as e:
+        log.error("Telegram init offset error: %s", e)
+
 def poll_telegram_commands() -> None:
     global _last_update_id
     if not TELEGRAM_TOKEN:
@@ -1046,6 +1065,9 @@ def main() -> None:
     t = threading.Thread(target=run_health_server, daemon=True)
     t.start()
     log.info("Health server port %d", PORT)
+
+    # Ignorer les anciens messages Telegram
+    init_telegram_offset()
 
     # Audit initial
     startup_audit()
