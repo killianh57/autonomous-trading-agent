@@ -48,6 +48,8 @@ HOLD_ASSETS  = ["VT", "SCHD", "VNQ"]
 TRADE_ASSETS = ["QQQ", "IBIT"]
 ALL_ASSETS   = HOLD_ASSETS + TRADE_ASSETS
 
+CORE_SYMBOLS = {"VT", "SCHD", "VNQ"}  # Jamais vendre ces positions
+
 HOLD_ALLOCATION = {
     "VT":   0.40,
     "SCHD": 0.15,
@@ -417,6 +419,9 @@ def place_market_buy(symbol: str, notional_usd: float) -> Optional[dict]:
     return result
 
 def place_market_sell_full(symbol: str) -> Optional[dict]:
+    if symbol in CORE_SYMBOLS:
+        log.warning("SELL bloque: %s est un asset CORE protege", symbol)
+        return None
     qty = get_position_qty(symbol)
     if qty <= 0:
         log.info("Pas de position a vendre: %s", symbol)
@@ -434,6 +439,9 @@ def place_market_sell_full(symbol: str) -> Optional[dict]:
     return result
 
 def place_market_sell_partial(symbol: str, qty: float) -> Optional[dict]:
+    if symbol in CORE_SYMBOLS:
+        log.warning("SELL PARTIAL bloque: %s est un asset CORE protege", symbol)
+        return None
     current_qty = get_position_qty(symbol)
     qty = min(qty, current_qty)
     if qty <= 0:
@@ -789,12 +797,13 @@ def _handle_command(text: str, chat_id) -> None:
         reply = "Trading Alpaca repris"
     elif text == "/alpaca_urgence":
         closed = 0
-        for sym in TRADE_ASSETS:
-            if has_position(sym) and not is_hold_asset(sym):
+        positions = get_positions()
+        for sym in list(positions.keys()):
+            if sym not in CORE_SYMBOLS and has_position(sym):
                 order = place_market_sell_full(sym)
                 if order:
                     closed += 1
-        reply = "Urgence: {} positions TRADE fermees".format(closed)
+        reply = "Urgence: {} positions satellite fermees (CORE proteges)".format(closed)
     elif text == "/alpaca_test":
         reply = "Test trade: achat 2 USD SPY..."
         requests.post(
