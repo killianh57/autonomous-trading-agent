@@ -21,6 +21,8 @@ from flask import Flask
 
 load_dotenv()
 
+DRY_RUN = os.getenv("DRY_RUN", "false").lower() == "true"
+
 # ---------------------------------------------------------------------------
 # LOGGING
 # ---------------------------------------------------------------------------
@@ -413,6 +415,9 @@ def place_market_buy(symbol: str, notional_usd: float) -> Optional[dict]:
         "type":          "market",
         "time_in_force": "day",
     }
+    if DRY_RUN:
+        log.info("DRY_RUN: skip BUY %s USD %.2f", symbol, notional_usd)
+        return {"dry_run": True}
     result = alpaca_post("/v2/orders", payload)
     if result:
         log.info("BUY %s USD %.2f - success (id=%s)", symbol, notional_usd, result.get("id", ""))
@@ -433,6 +438,9 @@ def place_market_sell_full(symbol: str) -> Optional[dict]:
         "type":          "market",
         "time_in_force": "day",
     }
+    if DRY_RUN:
+        log.info("DRY_RUN: skip SELL %s qty %.4f", symbol, qty)
+        return {"dry_run": True}
     result = alpaca_post("/v2/orders", payload)
     if result:
         log.info("SELL %s qty %.4f - success", symbol, qty)
@@ -453,6 +461,9 @@ def place_market_sell_partial(symbol: str, qty: float) -> Optional[dict]:
         "type":          "market",
         "time_in_force": "day",
     }
+    if DRY_RUN:
+        log.info("DRY_RUN: skip SELL PARTIAL %s qty %.4f", symbol, qty)
+        return {"dry_run": True}
     result = alpaca_post("/v2/orders", payload)
     if result:
         log.info("SELL PARTIAL %s qty %.4f", symbol, qty)
