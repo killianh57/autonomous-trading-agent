@@ -59,7 +59,7 @@ HOLD_ALLOCATION = {
 # Limites de risque
 MIN_CAPITAL_EUR    = 5.0    # Sous ce seuil : lecture seule, zero ordre
 MAX_TRADE_PCT      = 0.10   # Max 10% du capital par trade
-CONFIDENCE_MIN     = 80     # Score minimum pour entrer
+CONFIDENCE_MIN     = 60     # Score minimum pour entrer
 RR_MIN             = 2.0    # Risk/Reward minimum
 DAILY_LOSS_LIMIT   = -0.05  # -5% sur la journee : pause auto
 SPREAD_MAX_PCT     = 0.005  # Spread > 0.5% : skip (marche illiquide)
