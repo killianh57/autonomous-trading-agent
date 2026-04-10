@@ -614,17 +614,37 @@ def run_trade_scan() -> None:
     eur_balance = get_eur_balance()
 
     for pid in TRADE_ASSETS:
-        # Deja en position ? Verifier SL/TP
-        if has_position(pid):
-            _check_exit(pid)
-            continue
-
         # Analyser le signal
         signal = analyze(pid)
         log.info(
             "Signal %s: %s conf=%d reasons=%s",
             pid, signal["direction"], signal["confidence"], signal["reasons"]
         )
+
+        # Deja en position ? Verifier SL/TP ou sortie sur signal SHORT
+        if has_position(pid):
+            if (signal["direction"] == "SHORT"
+                    and signal["confidence"] >= CONFIDENCE_MIN
+                    and not is_hold_asset(pid)):
+                log.info("Signal SHORT sur position %s conf=%d - sortie", pid, signal["confidence"])
+                order = place_market_sell_full(pid)
+                if order:
+                    trade = _get_open_trade(pid)
+                    prices = get_prices([pid])
+                    current = prices.get(pid, 0.0)
+                    if trade and current:
+                        pnl_pct = (current - trade["entry"]) / trade["entry"] * 100
+                        trade["status"]  = "closed_signal"
+                        trade["exit"]    = current
+                        trade["exit_ts"] = datetime.now(timezone.utc).isoformat()
+                        _update_trade(trade)
+                        send_telegram(
+                            "Sortie signal SHORT: {}\nExit: {:.4f} | PnL: {:.1f}%".format(
+                                pid, current, pnl_pct)
+                        )
+            else:
+                _check_exit(pid)
+            continue
 
         if signal["direction"] != "LONG":
             log.info("Skip %s: direction=%s conf=%d", pid, signal["direction"], signal["confidence"])
