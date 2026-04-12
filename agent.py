@@ -46,6 +46,10 @@ load_dotenv()
 
 DRY_RUN = os.getenv("DRY_RUN", "false").lower() == "true"
 
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+ANTHROPIC_MODEL   = "claude-haiku-4-5-20251001"
+
+
 
 # ---------------------------------------------------------------------------
 # FEAR & GREED INDEX - sentiment macro crypto (alternative.me)
@@ -448,6 +452,54 @@ def analyze(symbol: str) -> dict:
                 result["reasons"].append("alpha_boost+" + str(boost))
         except Exception as e:
             log.warning("alpha_signal error for %s: %s", symbol, e)
+
+
+    # Fear & Greed modifier
+    fg = get_fear_greed()
+    if result["direction"] in ("LONG", "SHORT"):
+        result["confidence"] = fg_signal_modifier(result["confidence"], fg)
+        result["reasons"].append("F&G:{}/{}".format(fg.get("value","?"), fg.get("label","?")))
+
+    # Claude pre-trade validation
+    if result["direction"] in ("LONG", "SHORT") and result["confidence"] >= CONFIDENCE_MIN:
+        try:
+            def _ask_claude():
+                prompt = (
+                    "Tu es un trader pro. Valide ce signal Alpaca:\n"
+                    "Symbol: {}  Direction: {}  Confidence: {}\n"
+                    "Raisons: {}\n"
+                    "Prix: {:.2f}  SL: {:.2f}  TP: {:.2f}\n"
+                    "Fear&Greed: {} ({})\n\n"
+                    "Reponds JSON uniquement: {{\"valid\": true/false, \"confidence_adj\": +/-N, \"reason\": \"...\"}}"
+                ).format(
+                    symbol, result["direction"], result["confidence"],
+                    ", ".join(result["reasons"][-5:]),
+                    result["entry"], result["sl"], result["tp"],
+                    fg.get("value","?"), fg.get("label","?")
+                )
+                r = requests.post(
+                    "https://api.anthropic.com/v1/messages",
+                    headers={"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+                    json={"model": ANTHROPIC_MODEL, "max_tokens": 150, "messages": [{"role": "user", "content": prompt}]},
+                    timeout=12
+                )
+                return r.json()["content"][0]["text"]
+            import json as _json
+            raw = _with_retry(_ask_claude, retries=2, label="Claude/Alpaca")
+            cleaned = raw.strip().strip("```json").strip("```").strip()
+            verdict = _json.loads(cleaned)
+            if not verdict.get("valid", True):
+                log.info("Claude invalide signal %s: %s", symbol, verdict.get("reason",""))
+                result["direction"]  = "HOLD"
+                result["confidence"] = 0
+                result["reasons"].append("claude_veto: " + verdict.get("reason","")[:60])
+            else:
+                adj = int(verdict.get("confidence_adj", 0))
+                result["confidence"] = max(0, min(100, result["confidence"] + adj))
+                if adj != 0:
+                    result["reasons"].append("claude_adj:{:+d}".format(adj))
+        except Exception as _ce:
+            log.warning("Claude analysis error %s: %s", symbol, _ce)
 
     return result
 
