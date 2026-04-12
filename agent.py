@@ -20,6 +20,28 @@ from dotenv import load_dotenv
 from flask import Flask
 from alpha_signals import get_alpha_signal
 
+# ---------------------------------------------------------------------------
+# RETRY LOGIC - exponential backoff sur erreurs API transitoires
+# ---------------------------------------------------------------------------
+import time as _time_module
+
+def _with_retry(fn, retries=4, base_delay=1.0, label=""):
+    """Retry avec exponential backoff. 429/5xx = retente. 4xx autre = fail direct."""
+    for attempt in range(retries):
+        try:
+            return fn()
+        except Exception as _e:
+            _msg = str(_e)
+            _is_transient = any(c in _msg for c in ["429","500","502","503","504","timeout","Timeout","ConnectionError","RemoteDisconnected"])
+            if not _is_transient or attempt == retries - 1:
+                raise
+            _delay = base_delay * (2 ** attempt)
+            log.warning("Retry %s (%d/%d) apres %.1fs - %s", label, attempt+1, retries-1, _delay, _msg[:80])
+            _time_module.sleep(_delay)
+    raise RuntimeError("Max retries reached: " + label)
+
+
+
 load_dotenv()
 
 DRY_RUN = os.getenv("DRY_RUN", "false").lower() == "true"
