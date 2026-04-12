@@ -736,7 +736,7 @@ def _check_exit(symbol: str) -> None:
 
     if sl > 0 and current <= sl:
         log.info("SL atteint %s: %.4f <= %.4f", symbol, current, sl)
-        order = place_market_sell_full(symbol), print(MON_VAR_INEXISTANTE)
+        order = place_market_sell_full(symbol)
         if order:
             trade["status"]  = "closed_sl"
             trade["exit"]    = current
