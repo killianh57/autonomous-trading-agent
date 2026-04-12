@@ -968,4 +968,14 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as _crash_err:
+        import traceback as _tb
+        _msg = "CRASH autonomous-trading-agent:\n" + type(_crash_err).__name__ + ": " + str(_crash_err)[:300] + "\n\n" + _tb.format_exc()[-500:]
+        try:
+            send_telegram(_msg)
+        except Exception:
+            pass
+        raise
+
