@@ -46,6 +46,50 @@ load_dotenv()
 
 DRY_RUN = os.getenv("DRY_RUN", "false").lower() == "true"
 
+
+# ---------------------------------------------------------------------------
+# FEAR & GREED INDEX - sentiment macro crypto (alternative.me)
+# ---------------------------------------------------------------------------
+_fg_cache = {"value": None, "label": None, "ts": 0}
+
+def get_fear_greed() -> dict:
+    """Retourne Fear & Greed Index. Cache 1h. 0=extreme fear, 100=extreme greed."""
+    global _fg_cache
+    now = _time_module.time()
+    if _fg_cache["value"] is not None and now - _fg_cache["ts"] < 3600:
+        return _fg_cache
+    try:
+        def _fetch():
+            r = requests.get("https://api.alternative.me/fng/?limit=1", timeout=8)
+            return r.json()["data"][0]
+        data = _with_retry(_fetch, label="FearGreed")
+        _fg_cache = {
+            "value": int(data["value"]),
+            "label": data["value_classification"],
+            "ts": now
+        }
+        log.info("Fear&Greed: %d (%s)", _fg_cache["value"], _fg_cache["label"])
+    except Exception as e:
+        log.warning("Fear&Greed fetch error: %s", e)
+        if _fg_cache["value"] is None:
+            _fg_cache = {"value": 50, "label": "Neutral", "ts": now}
+    return _fg_cache
+
+def fg_signal_modifier(score: int, fg: dict) -> int:
+    """Ajuste le score de confiance selon le sentiment macro.
+    Extreme Fear (<20) : +15 (opportunite d achat contrariante)
+    Extreme Greed (>80): -15 (risque de retournement)
+    """
+    val = fg.get("value", 50)
+    if val < 20:
+        log.info("Extreme Fear %d : bonus +15 signal", val)
+        return score + 15
+    if val > 80:
+        log.info("Extreme Greed %d : malus -15 signal", val)
+        return score - 15
+    return score
+
+
 # ---------------------------------------------------------------------------
 # LOGGING
 # ---------------------------------------------------------------------------
