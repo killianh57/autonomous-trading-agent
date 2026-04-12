@@ -736,6 +736,52 @@ _last_update_id = 0
 
 _telegram_lock = threading.Lock()
 
+
+def _scan_sante():
+    import ast as _ast, re as _re, glob as _glob
+    py_files = [f for f in _glob.glob("*.py") if not f.startswith(".")]
+    if not py_files:
+        return "Aucun fichier .py trouve"
+    errors = []
+    for fpath in py_files:
+        try:
+            with open(fpath, "r", encoding="utf-8", errors="replace") as _f:
+                _code = _f.read()
+            try:
+                _tree = _ast.parse(_code)
+            except SyntaxError as _e:
+                errors.append("{}: SyntaxError L{}".format(fpath, _e.lineno))
+                continue
+            bad = sum(1 for c in _code if ord(c) > 127)
+            if bad:
+                errors.append("{}: {} non-ASCII".format(fpath, bad))
+            _defined = set()
+            for _n in _ast.walk(_tree):
+                if isinstance(_n, _ast.Assign):
+                    for _t in _n.targets:
+                        if isinstance(_t, _ast.Name): _defined.add(_t.id)
+                elif isinstance(_n, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+                    _defined.add(_n.name)
+                elif isinstance(_n, _ast.Import):
+                    for _a in _n.names: _defined.add(_a.asname or _a.name.split(".")[0])
+                elif isinstance(_n, _ast.ImportFrom):
+                    for _a in _n.names: _defined.add(_a.asname or _a.name)
+            _skip = {"True","False","None","NONE","GET","POST","PUT","DELETE","OK","EOF"}
+            _undef = sorted(set(
+                _n.id for _n in _ast.walk(_tree)
+                if isinstance(_n, _ast.Name) and isinstance(_n.ctx, _ast.Load)
+                and _re.match(r"^[A-Z][A-Z_0-9]{2,}$", _n.id)
+                and _n.id not in _defined and _n.id not in _skip
+            ))
+            if _undef:
+                errors.append("{}: UNDEF {}".format(fpath, ", ".join(_undef[:3])))
+        except Exception as _e:
+            errors.append("{}: {}".format(fpath, str(_e)[:60]))
+    if errors:
+        return "Scan sante - ERREURS:\n" + "\n".join("  - " + e for e in errors)
+    return "Scan sante: {} fichier(s) OK".format(len(py_files))
+
+
 def poll_telegram_commands() -> None:
     global _last_update_id
     if not TELEGRAM_TOKEN:
@@ -776,7 +822,7 @@ def _handle_command(text: str, chat_id) -> None:
             "/alpaca_resume   - Reprendre\n"
             "/alpaca_urgence  - Fermer toutes positions trade\n"
             "/alpaca_test     - Test achat+vente 2 USD SPY\n"
-            "/aide            - Aide"
+            "/aide            - Aide\n/scan_sante      - Scan sante du code"
         )
     elif text == "/alpaca_status":
         acc       = get_account()
@@ -856,6 +902,9 @@ def _handle_command(text: str, chat_id) -> None:
             time.sleep(3)
             sell = place_market_sell_full("SPY")
             reply = "Test OK: achat + vente SPY executes" if sell else "Test PARTIEL: achat OK, vente echouee"
+    elif text == "/scan_sante":
+        reply = _scan_sante()
+
     else:
         return
 
