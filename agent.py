@@ -734,9 +734,15 @@ def morning_brief() -> None:
 # ---------------------------------------------------------------------------
 _last_update_id = 0
 
+_telegram_lock = threading.Lock()
+
 def poll_telegram_commands() -> None:
     global _last_update_id
     if not TELEGRAM_TOKEN:
+        return
+    # Lock : empeche 2 threads de poller simultanement (bug doublon)
+    if not _telegram_lock.acquire(blocking=False):
+        log.debug("Telegram poll already running, skipping")
         return
     try:
         url  = "https://api.telegram.org/bot{}/getUpdates".format(TELEGRAM_TOKEN)
@@ -744,7 +750,10 @@ def poll_telegram_commands() -> None:
         if not resp.ok:
             return
         for update in resp.json().get("result", []):
-            _last_update_id = update["update_id"]
+            uid = update["update_id"]
+            if uid <= _last_update_id:
+                continue  # doublon detecte, skip
+            _last_update_id = uid
             msg     = update.get("message", {})
             text    = msg.get("text", "").strip()
             chat_id = msg.get("chat", {}).get("id")
@@ -752,6 +761,8 @@ def poll_telegram_commands() -> None:
                 _handle_command(text, chat_id)
     except Exception as e:
         log.error("Telegram poll error: %s", e)
+    finally:
+        _telegram_lock.release()
 
 def _handle_command(text: str, chat_id) -> None:
     if text == "/aide":
