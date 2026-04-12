@@ -51,6 +51,85 @@ ANTHROPIC_MODEL   = "claude-haiku-4-5-20251001"
 
 
 
+
+# ---------------------------------------------------------------------------
+# NOTION AUTO-LOG + LINEAR TICKET
+# ---------------------------------------------------------------------------
+NOTION_TOKEN   = os.getenv("NOTION_TOKEN", "")
+NOTION_DB_ID   = os.getenv("NOTION_TRADES_DB_ID", "e9fdd6706eea4fb4894f3f41066bc1c3")
+LINEAR_API_KEY = os.getenv("LINEAR_API_KEY", "")
+LINEAR_TEAM_ID = os.getenv("LINEAR_TEAM_ID", "")
+
+def notion_log_trade(trade: dict) -> None:
+    """Log un trade ferme dans la base Notion Trades."""
+    if not NOTION_TOKEN:
+        return
+    try:
+        symbol   = str(trade.get("symbol") or trade.get("product_id") or trade.get("mint", "?"))
+        direction = str(trade.get("direction") or trade.get("side", "?")).upper()
+        status   = str(trade.get("status") or trade.get("reason", "?"))
+        pnl_raw  = trade.get("pnl") or trade.get("pnl_sol") or trade.get("pnl_pct", 0)
+        try:
+            pnl = float(pnl_raw)
+        except Exception:
+            pnl = 0.0
+        entry    = float(trade.get("entry") or trade.get("spend_sol") or 0)
+        exit_p   = float(trade.get("exit") or trade.get("out_sol") or 0)
+        reasons  = trade.get("reasons") or trade.get("rug_reasons") or []
+        ts       = trade.get("ts") or trade.get("date") or datetime.now(timezone.utc).isoformat()
+        outcome  = "Win" if pnl >= 0 else "Loss"
+        props = {
+            "Name":      {"title": [{"text": {"content": "{} {} {}".format(symbol, direction, outcome)}}]},
+            "Symbol":    {"rich_text": [{"text": {"content": symbol}}]},
+            "Direction": {"select": {"name": direction}},
+            "Status":    {"select": {"name": status[:100]}},
+            "PnL":       {"number": round(pnl, 4)},
+            "Entry":     {"number": round(entry, 6)},
+            "Exit":      {"number": round(exit_p, 6)},
+            "Outcome":   {"select": {"name": outcome}},
+            "Reasons":   {"rich_text": [{"text": {"content": ", ".join(str(r) for r in reasons[:10])[:2000]}}]},
+            "Date":      {"date": {"start": ts[:19] + "Z" if "T" in str(ts) else datetime.now(timezone.utc).isoformat()[:19] + "Z"}},
+        }
+        def _notion_req():
+            return requests.post(
+                "https://api.notion.com/v1/pages",
+                headers={"Authorization": "Bearer " + NOTION_TOKEN, "Notion-Version": "2022-06-28", "Content-Type": "application/json"},
+                json={"parent": {"database_id": NOTION_DB_ID}, "properties": props},
+                timeout=10
+            )
+        _with_retry(_notion_req, retries=2, label="NotionLog")
+        log.info("Notion trade logged: %s %s PnL=%.4f", symbol, outcome, pnl)
+    except Exception as e:
+        log.warning("Notion log error: %s", e)
+
+def linear_create_ticket(title: str, body: str) -> None:
+    """Cree un ticket Linear quand erreur non-resolvable detectee."""
+    if not LINEAR_API_KEY or not LINEAR_TEAM_ID:
+        return
+    try:
+        query = """
+        mutation IssueCreate($title: String!, $teamId: String!, $description: String!) {
+          issueCreate(input: {title: $title, teamId: $teamId, description: $description}) {
+            issue { id url }
+          }
+        }"""
+        def _linear_req():
+            return requests.post(
+                "https://api.linear.app/graphql",
+                headers={"Authorization": LINEAR_API_KEY, "Content-Type": "application/json"},
+                json={"query": query, "variables": {"title": title[:256], "teamId": LINEAR_TEAM_ID, "description": body[:5000]}},
+                timeout=10
+            )
+        resp = _with_retry(_linear_req, retries=2, label="LinearTicket")
+        data = resp.json()
+        url = data.get("data", {}).get("issueCreate", {}).get("issue", {}).get("url", "")
+        log.info("Linear ticket created: %s", url)
+        if url:
+            send_telegram("Linear ticket: " + url)
+    except Exception as e:
+        log.warning("Linear ticket error: %s", e)
+
+
 # ---------------------------------------------------------------------------
 # FEAR & GREED INDEX - sentiment macro crypto (alternative.me)
 # ---------------------------------------------------------------------------
@@ -811,6 +890,8 @@ def _update_trade(updated: dict) -> None:
             trades[i] = updated
             break
     _save_trades(trades)
+    if updated.get("status") not in ("open", None):
+        notion_log_trade(updated)
 
 # ---------------------------------------------------------------------------
 # MORNING BRIEF
@@ -1095,6 +1176,10 @@ if __name__ == "__main__":
         _msg = "CRASH autonomous-trading-agent:\n" + _err_text + "\n\n" + _trace + "\nAuto-fix en cours..."
         try:
             send_telegram(_msg)
+        except Exception:
+            pass
+        try:
+            linear_create_ticket("CRASH " + __file__, str(_crash_err) + "\n\n" + _tb.format_exc()[-800:])
         except Exception:
             pass
         try:
