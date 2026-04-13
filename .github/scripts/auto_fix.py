@@ -1,27 +1,51 @@
 #!/usr/bin/env python3
 """
-auto_fix.py v2 - Service technique autonome avec Claude
-Detecte et corrige les erreurs Python a chaque push.
+auto_fix.py v3 - Service technique autonome avec mode nuit
+00h-07h UTC : auto-fix complet avec protection code vital
+07h-00h UTC : alert Telegram uniquement
 """
 import ast, re, os, sys, json, base64, subprocess, requests
+from datetime import datetime, timezone
 
 TELEGRAM_TOKEN  = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT   = os.getenv("TELEGRAM_CHAT_ID", "")
 ANTHROPIC_KEY   = os.getenv("ANTHROPIC_API_KEY", "")
 REPO            = os.getenv("REPO", "")
 
-#     TELEGRAM    
+# Patterns qui touchent au code vital (trading, ordres, capital)
+VITAL_PATTERNS = [
+    "place_order", "place_market", "place_limit", "execute_swap",
+    "send_transaction", "kelly", "sl", "tp", "stop_loss",
+    "take_profit", "pnl", "confidence", "rr_min", "capital",
+    "buy", "sell", "notional", "qty", "amount", "price",
+    "entry", "exit", "position", "trade", "order"
+]
+
+def is_night_mode():
+    """True entre 00h et 07h UTC."""
+    hour = datetime.now(timezone.utc).hour
+    return 0 <= hour < 7
+
+def is_vital_context(context_lines):
+    """True si le contexte touche au code vital."""
+    ctx_lower = context_lines.lower()
+    return any(p in ctx_lower for p in VITAL_PATTERNS)
+
+# ─── TELEGRAM ───
 def telegram(msg):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT:
         print("Telegram non configure")
         return
-    requests.post(
-        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-        json={"chat_id": TELEGRAM_CHAT, "text": msg, "parse_mode": "HTML"},
-        timeout=10
-    )
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+            json={"chat_id": TELEGRAM_CHAT, "text": msg, "parse_mode": "HTML"},
+            timeout=10
+        )
+    except Exception as e:
+        print(f"Telegram error: {e}")
 
-#     CLAUDE GUESS VALUE    
+# ─── CLAUDE GUESS VALUE ───
 def claude_guess_value(name, context_lines, full_code):
     if not ANTHROPIC_KEY:
         return None
@@ -50,20 +74,57 @@ def claude_guess_value(name, context_lines, full_code):
             timeout=15
         )
         val = r.json()["content"][0]["text"].strip()
-        # Validate: must be a valid Python literal
         ast.literal_eval(val)
         return val
     except Exception as e:
         print(f"Claude error for {name}: {e}")
         return None
 
-#     INJECT CONSTANT    
+# ─── CLAUDE SAFE ALTERNATIVE ───
+def claude_safe_alternative(name, context_lines, full_code):
+    """Pour code vital : trouve une solution qui ne touche pas a la logique trading."""
+    if not ANTHROPIC_KEY:
+        return None
+    prompt = (
+        f"Tu es un expert Python. Dans ce bot de trading, la constante '{name}' "
+        f"est manquante mais son contexte touche au code vital (ordres/capital/PnL).\n\n"
+        f"Contexte:\n{context_lines}\n\n"
+        f"Tu NE PEUX PAS modifier la logique de trading directement.\n"
+        f"Propose une solution SAFE parmi:\n"
+        f"1. Valeur par defaut neutre qui desactive la fonctionnalite (ex: 0, False, None)\n"
+        f"2. Commentaire de la ligne incriminee (prefixe #)\n"
+        f"3. Guard clause qui court-circuite le bloc\n\n"
+        f"Reponds JSON: {{\"strategy\": \"default_value|comment_line|guard\", "
+        f"\"value\": \"la valeur ou None\", \"reason\": \"explication courte\"}}\n"
+        f"JSON uniquement, pas de markdown."
+    )
+    try:
+        r = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": ANTHROPIC_KEY,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json"
+            },
+            json={
+                "model": "claude-haiku-4-5-20251001",
+                "max_tokens": 150,
+                "messages": [{"role": "user", "content": prompt}]
+            },
+            timeout=15
+        )
+        raw = r.json()["content"][0]["text"].strip()
+        return json.loads(raw)
+    except Exception as e:
+        print(f"Claude safe_alt error: {e}")
+        return None
+
+# ─── INJECT CONSTANT ───
 def inject_constant(code, name, value, comment=""):
     lines = code.split("\n")
-    # Find last constant definition block (CAPS = value pattern)
     last_const_line = 0
     for i, line in enumerate(lines):
-        if re.match(r"^[A-Z][A-Z_0-9]+\s*=", line.strip()):
+        if re.match(r"^[A-Z][A-Z_0-9]+\s*=", line.strip()) or re.match(r"^[A-Z][A-Z_0-9]+\s*:", line.strip()):
             last_const_line = i
     insert_line = last_const_line + 1
     new_line = f"{name:<22} = {value}"
@@ -72,7 +133,7 @@ def inject_constant(code, name, value, comment=""):
     lines.insert(insert_line, new_line)
     return "\n".join(lines)
 
-#     SYNTAX CHECK    
+# ─── SYNTAX CHECK ───
 def check_syntax(code, path):
     try:
         ast.parse(code)
@@ -80,7 +141,7 @@ def check_syntax(code, path):
     except SyntaxError as e:
         return f"SyntaxError line {e.lineno}: {e.msg}"
 
-#     UNDEFINED CONSTANTS    
+# ─── UNDEFINED CONSTANTS ───
 def find_undefined_constants(code):
     try:
         tree = ast.parse(code)
@@ -111,7 +172,7 @@ def find_undefined_constants(code):
             if re.match(r"^[A-Z][A-Z_0-9]{2,}$", node.id):
                 used.add(node.id)
 
-    skip = {"True","False","None","NONE","GET","POST","PUT","DELETE","OK","EOF"}
+    skip = {"True", "False", "None", "NONE", "GET", "POST", "PUT", "DELETE", "OK", "EOF"}
     lines = code.split("\n")
     undef = []
     for name in sorted(used - defined - skip):
@@ -120,11 +181,11 @@ def find_undefined_constants(code):
             undef.append((name, lns))
     return undef, None
 
-#     NON-ASCII    
+# ─── NON-ASCII ───
 def find_non_ascii(code):
     return [(i+1, repr(c)) for i, c in enumerate(code) if ord(c) > 127]
 
-#     GET PY FILES    
+# ─── GET PY FILES ───
 def get_py_files():
     result = subprocess.run(
         ["git", "diff", "--name-only", "HEAD~1", "HEAD"],
@@ -141,13 +202,16 @@ def get_py_files():
                     changed.append(os.path.join(root, f).lstrip("./"))
     return changed
 
-#     MAIN    
+# ─── MAIN ───
 def main():
     py_files = get_py_files()
     if not py_files:
         print("No Python files to check.")
         return
 
+    night = is_night_mode()
+    hour_utc = datetime.now(timezone.utc).hour
+    print(f"Mode: {'NUIT AUTO-FIX' if night else 'JOUR ALERT-ONLY'} ({hour_utc}h UTC)")
     print(f"Checking {len(py_files)} file(s): {py_files}")
 
     fixes_applied = []
@@ -162,7 +226,7 @@ def main():
 
         lines = code.split("\n")
 
-        # 1. Syntax check
+        # 1. Syntax
         syntax_err = check_syntax(code, fpath)
         if syntax_err:
             errors_remaining.append(("SYNTAX", fpath, syntax_err))
@@ -170,64 +234,101 @@ def main():
 
         modified = False
 
-        # 2. Non-ASCII auto-fix
+        # 2. Non-ASCII auto-fix (toujours, nuit et jour)
         bad_chars = find_non_ascii(code)
         if bad_chars:
             code = "".join(c if ord(c) <= 127 else " " for c in code)
             fixes_applied.append(f"{fpath}: removed {len(bad_chars)} non-ASCII chars")
             modified = True
 
-        # 3. Undefined constants - ask Claude
+        # 3. Undefined constants
         undef, _ = find_undefined_constants(code)
         for name, lns in undef:
             context = "\n".join(lines[max(0, lns[0]-5):lns[0]+5])
-            value = claude_guess_value(name, context, code)
-            if value is not None:
-                code = inject_constant(code, name, value, f"auto-fix by Claude")
-                fixes_applied.append(f"{fpath}: injected {name} = {value}")
-                modified = True
-                print(f"Claude fixed: {name} = {value}")
+            vital = is_vital_context(context)
+
+            if not night:
+                # Jour : alert seulement
+                errors_remaining.append(("UNDEF", fpath, name, lns, vital))
+                continue
+
+            # Nuit : tenter auto-fix
+            if not vital:
+                # Code non-vital : fix direct
+                value = claude_guess_value(name, context, code)
+                if value is not None:
+                    code = inject_constant(code, name, value, "auto-fix nuit")
+                    fixes_applied.append(f"{fpath}: injected {name} = {value}")
+                    modified = True
+                else:
+                    errors_remaining.append(("UNDEF", fpath, name, lns, False))
             else:
-                errors_remaining.append(("UNDEF", fpath, name, lns))
+                # Code vital : chercher alternative safe
+                alt = claude_safe_alternative(name, context, code)
+                if alt:
+                    strategy = alt.get("strategy", "")
+                    reason = alt.get("reason", "")
+                    if strategy == "default_value" and alt.get("value"):
+                        code = inject_constant(code, name, alt["value"], f"safe-alt: {reason[:40]}")
+                        fixes_applied.append(f"{fpath}: VITAL safe-alt {name} = {alt['value']} ({reason})")
+                        modified = True
+                    elif strategy == "comment_line":
+                        # Commenter la ligne incriminee
+                        for ln in lns[:1]:
+                            idx = ln - 1
+                            if not lines[idx].strip().startswith("#"):
+                                lines[idx] = "# AUTO-DISABLED (vital): " + lines[idx]
+                        code = "\n".join(lines)
+                        fixes_applied.append(f"{fpath}: VITAL line {lns[0]} commented ({reason})")
+                        modified = True
+                    else:
+                        errors_remaining.append(("UNDEF_VITAL", fpath, name, lns, True))
+                        fixes_applied.append(f"{fpath}: VITAL {name} - alt strategy: {reason}")
+                else:
+                    errors_remaining.append(("UNDEF_VITAL", fpath, name, lns, True))
 
         if modified:
             files_modified[fpath] = code
 
-    # Write modified files
+    # Write + commit
     for fpath, new_code in files_modified.items():
         with open(fpath, "w", encoding="utf-8") as f:
             f.write(new_code)
 
-    # Commit if any fixes
     if files_modified:
         subprocess.run(["git", "config", "user.email", "autofix@bot.com"])
         subprocess.run(["git", "config", "user.name", "AutoFix Bot"])
         subprocess.run(["git", "add", "-A"])
-        msg = "fix(auto): " + " | ".join(fixes_applied[:3])
+        msg = "fix(auto-nuit): " + " | ".join(fixes_applied[:3])
         subprocess.run(["git", "commit", "-m", msg])
         subprocess.run(["git", "push"])
 
     # Telegram report
+    mode_tag = "NUIT" if night else "JOUR"
     if not fixes_applied and not errors_remaining:
-        telegram(f"<b>OK {REPO}</b>\nAudit Python : aucune erreur detectee.")
-        print("All clean.")
+        telegram(f"<b>OK [{mode_tag}] {REPO}</b>\nAudit Python : aucune erreur.")
         return
 
-    lines_msg = [f"<b>Service Technique - {REPO}</b>"]
+    lines_msg = [f"<b>Service Technique [{mode_tag}] - {REPO}</b>"]
 
     if fixes_applied:
-        lines_msg.append("\n<b>Auto-fixes Claude :</b>")
+        lines_msg.append("\n<b>Fixes appliques :</b>")
         for fix in fixes_applied:
-            lines_msg.append(f"  - {fix}")
+            icon = "VITAL" if "VITAL" in fix else "OK"
+            lines_msg.append(f"  [{icon}] {fix}")
 
     if errors_remaining:
         lines_msg.append("\n<b>Erreurs non resolues :</b>")
         for item in errors_remaining:
+            vital_tag = " [VITAL]" if item[-1] else ""
             if item[0] == "SYNTAX":
                 lines_msg.append(f"  SYNTAX {item[1]}: {item[2]}")
             else:
-                lines_msg.append(f"  UNDEF {item[1]}: {item[2]} (L{item[3]})")
-        lines_msg.append("\nAction requise : corriger et push.")
+                lines_msg.append(f"  UNDEF{vital_tag} {item[1]}: {item[2]} (L{item[3]})")
+        if not night:
+            lines_msg.append("\n<i>Mode JOUR - correction manuelle requise</i>")
+        else:
+            lines_msg.append("\n<i>Mode NUIT - solution alternative non trouvee</i>")
 
     telegram("\n".join(lines_msg))
     print("\n".join(lines_msg))
