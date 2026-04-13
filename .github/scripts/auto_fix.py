@@ -93,6 +93,9 @@ def find_undefined_constants(code):
             for t in node.targets:
                 if isinstance(t, ast.Name):
                     defined.add(t.id)
+        elif isinstance(node, ast.AnnAssign):
+            if isinstance(node.target, ast.Name):
+                defined.add(node.target.id)
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             defined.add(node.name)
         elif isinstance(node, ast.Import):
