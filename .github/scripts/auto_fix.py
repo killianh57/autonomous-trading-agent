@@ -31,7 +31,7 @@ def is_vital_context(context_lines):
     ctx_lower = context_lines.lower()
     return any(p in ctx_lower for p in VITAL_PATTERNS)
 
-# ─── TELEGRAM ───
+#     TELEGRAM    
 def telegram(msg):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT:
         print("Telegram non configure")
@@ -45,7 +45,7 @@ def telegram(msg):
     except Exception as e:
         print(f"Telegram error: {e}")
 
-# ─── CLAUDE GUESS VALUE ───
+#     CLAUDE GUESS VALUE    
 def claude_guess_value(name, context_lines, full_code):
     if not ANTHROPIC_KEY:
         return None
@@ -80,7 +80,7 @@ def claude_guess_value(name, context_lines, full_code):
         print(f"Claude error for {name}: {e}")
         return None
 
-# ─── CLAUDE SAFE ALTERNATIVE ───
+#     CLAUDE SAFE ALTERNATIVE    
 def claude_safe_alternative(name, context_lines, full_code):
     """Pour code vital : trouve une solution qui ne touche pas a la logique trading."""
     if not ANTHROPIC_KEY:
@@ -119,7 +119,7 @@ def claude_safe_alternative(name, context_lines, full_code):
         print(f"Claude safe_alt error: {e}")
         return None
 
-# ─── INJECT CONSTANT ───
+#     INJECT CONSTANT    
 def inject_constant(code, name, value, comment=""):
     lines = code.split("\n")
     last_const_line = 0
@@ -133,7 +133,7 @@ def inject_constant(code, name, value, comment=""):
     lines.insert(insert_line, new_line)
     return "\n".join(lines)
 
-# ─── SYNTAX CHECK ───
+#     SYNTAX CHECK    
 def check_syntax(code, path):
     try:
         ast.parse(code)
@@ -141,7 +141,7 @@ def check_syntax(code, path):
     except SyntaxError as e:
         return f"SyntaxError line {e.lineno}: {e.msg}"
 
-# ─── UNDEFINED CONSTANTS ───
+#     UNDEFINED CONSTANTS    
 def find_undefined_constants(code):
     try:
         tree = ast.parse(code)
@@ -181,11 +181,11 @@ def find_undefined_constants(code):
             undef.append((name, lns))
     return undef, None
 
-# ─── NON-ASCII ───
+#     NON-ASCII    
 def find_non_ascii(code):
     return [(i+1, repr(c)) for i, c in enumerate(code) if ord(c) > 127]
 
-# ─── GET PY FILES ───
+#     GET PY FILES    
 def get_py_files():
     result = subprocess.run(
         ["git", "diff", "--name-only", "HEAD~1", "HEAD"],
@@ -202,7 +202,7 @@ def get_py_files():
                     changed.append(os.path.join(root, f).lstrip("./"))
     return changed
 
-# ─── MAIN ───
+#     MAIN    
 def main():
     py_files = get_py_files()
     if not py_files:
