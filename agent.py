@@ -19,6 +19,7 @@ import schedule
 from dotenv import load_dotenv
 from flask import Flask
 from alpha_signals import get_alpha_signal
+from sonar_sentiment import get_sonar_sentiment, sonar_signal_modifier
 
 # ---------------------------------------------------------------------------
 # RETRY LOGIC - exponential backoff sur erreurs API transitoires
@@ -548,6 +549,13 @@ def analyze(symbol: str) -> dict:
     if result["direction"] in ("LONG", "SHORT"):
         result["confidence"] = fg_signal_modifier(result["confidence"], fg)
         result["reasons"].append("F&G:{}/{}".format(fg.get("value","?"), fg.get("label","?")))
+
+    # Sonar news sentiment (Perplexity API)
+    if result["direction"] in ("LONG", "SHORT"):
+        sonar = get_sonar_sentiment(symbol, asset_type="stock")
+        result["confidence"] = sonar_signal_modifier(result["confidence"], sonar)
+        result["reasons"].append("Sonar:{}/{}".format(
+            sonar.get("score", 0), sonar.get("summary", "?")[:40]))
 
     # Claude pre-trade validation
     if result["direction"] in ("LONG", "SHORT") and result["confidence"] >= CONFIDENCE_MIN:
