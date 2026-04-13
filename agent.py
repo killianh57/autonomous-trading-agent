@@ -969,6 +969,8 @@ def _scan_sante():
                 if isinstance(_n, _ast.Assign):
                     for _t in _n.targets:
                         if isinstance(_t, _ast.Name): _defined.add(_t.id)
+                elif isinstance(_n, _ast.AnnAssign):
+                    if isinstance(_n.target, _ast.Name): _defined.add(_n.target.id)
                 elif isinstance(_n, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
                     _defined.add(_n.name)
                 elif isinstance(_n, _ast.Import):
