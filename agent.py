@@ -197,7 +197,7 @@ TRADE_BASE_URL = "https://paper-api.alpaca.markets" if ALPACA_PAPER else "https:
 DATA_BASE_URL  = "https://data.alpaca.markets"
 
 HOLD_ASSETS  = ["VT", "SCHD", "VNQ"]
-TRADE_ASSETS = ["QQQ", "IBIT"]
+TRADE_ASSETS = ["SPY", "QQQ", "IBIT"]
 ALL_ASSETS   = HOLD_ASSETS + TRADE_ASSETS
 
 CORE_SYMBOLS = {"VT", "SCHD", "VNQ"}  # Jamais vendre ces positions
@@ -505,10 +505,14 @@ def analyze(symbol: str) -> dict:
     result["reasons"] = reasons
 
     bull = sum(1 for r in reasons if any(w in r for w in ["bullish", "oversold", "golden", "HH"]))
+    if score > 0 and any("vol" in r for r in reasons):
+        bull += 1
     bear = sum(1 for r in reasons if any(w in r for w in ["bearish", "overbought", "death", "LL"]))
+    if score < 0 and any("vol" in r for r in reasons):
+        bear += 1
     abs_score = abs(score)
 
-    if bull >= 3 and score >= CONFIDENCE_MIN:
+    if bull >= 2 and score >= CONFIDENCE_MIN:
         result["direction"]  = "LONG"
         result["confidence"] = min(score, 100)
     elif bear >= 3 and abs_score >= CONFIDENCE_MIN:
@@ -516,6 +520,12 @@ def analyze(symbol: str) -> dict:
         result["confidence"] = min(abs_score, 100)
     else:
         result["confidence"] = min(abs_score, 100)
+        # Contrarian: Extreme Fear + RSI oversold = opportunite d achat
+        fg_val_now = get_fear_greed().get("value", 50)
+        if fg_val_now < 25 and rsi_val < 38 and score > 15:
+            result["direction"] = "LONG"
+            result["confidence"] = min(score + 20, 100)
+            result["reasons"].append("contrarian_extreme_fear")
 
     # Alpha signal boost for crypto-backed assets (IBIT)
     if symbol in ("IBIT",):
