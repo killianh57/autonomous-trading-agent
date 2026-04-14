@@ -552,45 +552,63 @@ def analyze(symbol: str) -> dict:
         result["confidence"] = fg_signal_modifier(result["confidence"], fg)
         result["reasons"].append("F&G:{}/{}".format(fg.get("value","?"), fg.get("label","?")))
 
-    # Sonar news sentiment (Perplexity API)
+    # --- SENTIMENT CONSENSUS (Sonar + Reddit + Twitter) ---
+    # Collect scores from all 3 sources, veto only if 2/3 agree
     if result["direction"] in ("LONG", "SHORT"):
-        sonar = get_sonar_sentiment(symbol, asset_type="stock")
-        result["confidence"] = sonar_signal_modifier(result["confidence"], sonar)
-        result["reasons"].append("Sonar:{}/{}".format(
-            sonar.get("score", 0), sonar.get("summary", "?")[:40]))
+        sentiment_scores = []  # list of (name, score_on_-10_+10_scale)
 
-    # Reddit crowd sentiment
-    if result["direction"] in ("LONG", "SHORT"):
+        # 1. Sonar (news) - still adjusts confidence via its own modifier
         try:
-            r_ok, r_reason, r_score = reddit_sentiment_filter(symbol, asset_type="stock")
+            sonar = get_sonar_sentiment(symbol, asset_type="stock")
+            result["confidence"] = sonar_signal_modifier(result["confidence"], sonar)
+            sonar_score = sonar.get("score", 0) / 10.0  # normalize -100/+100 -> -10/+10
+            sonar_score = max(-10, min(10, sonar_score))
+            sentiment_scores.append(("Sonar", sonar_score))
+            result["reasons"].append("Sonar:{}/{:.0f}".format(
+                sonar.get("score", 0), sonar.get("summary", "?")[:40]))
+        except Exception as e:
+            log.warning("Sonar sentiment error: %s", e)
+
+        # 2. Reddit (crowd)
+        try:
+            _, r_reason, r_score = reddit_sentiment_filter(symbol, asset_type="stock")
+            sentiment_scores.append(("Reddit", r_score))
             result["reasons"].append(r_reason)
-            if not r_ok:
-                result["direction"] = "HOLD"
-                result["reasons"].append("Reddit_VETO")
-            elif r_score != 0:
-                # Slight confidence adjustment based on crowd alignment
-                if (result["direction"] == "LONG" and r_score > 3) or (result["direction"] == "SHORT" and r_score < -3):
-                    result["confidence"] = min(result["confidence"] + 3, 100)
-                elif (result["direction"] == "LONG" and r_score < -3) or (result["direction"] == "SHORT" and r_score > 3):
-                    result["confidence"] = max(result["confidence"] - 5, 0)
         except Exception as e:
             log.warning("Reddit sentiment error: %s", e)
 
-    # Twitter/X sentiment
-    if result["direction"] in ("LONG", "SHORT"):
+        # 3. Twitter/X (social)
         try:
-            t_ok, t_reason, t_score = twitter_sentiment_filter(symbol, asset_type="stock")
+            _, t_reason, t_score = twitter_sentiment_filter(symbol, asset_type="stock")
+            sentiment_scores.append(("Twitter", t_score))
             result["reasons"].append(t_reason)
-            if not t_ok:
-                result["direction"] = "HOLD"
-                result["reasons"].append("Twitter_VETO")
-            elif t_score != 0:
-                if (result["direction"] == "LONG" and t_score > 3) or (result["direction"] == "SHORT" and t_score < -3):
-                    result["confidence"] = min(result["confidence"] + 2, 100)
-                elif (result["direction"] == "LONG" and t_score < -3) or (result["direction"] == "SHORT" and t_score > 3):
-                    result["confidence"] = max(result["confidence"] - 3, 0)
         except Exception as e:
             log.warning("Twitter sentiment error: %s", e)
+
+        # --- CONSENSUS VOTE ---
+        if sentiment_scores:
+            negatives = sum(1 for _, s in sentiment_scores if s <= -6)
+            fomo = sum(1 for _, s in sentiment_scores if s >= 8)
+            avg_sentiment = sum(s for _, s in sentiment_scores) / len(sentiment_scores)
+
+            if negatives >= 2:
+                result["direction"] = "HOLD"
+                result["reasons"].append("CONSENSUS_VETO_bearish({}/{})".format(negatives, len(sentiment_scores)))
+            elif fomo >= 2:
+                result["direction"] = "HOLD"
+                result["reasons"].append("CONSENSUS_VETO_fomo({}/{})".format(fomo, len(sentiment_scores)))
+            elif negatives == 1:
+                result["confidence"] = max(result["confidence"] - 5, 0)
+                result["reasons"].append("CONSENSUS_warn_1neg")
+            elif fomo == 1:
+                result["confidence"] = max(result["confidence"] - 3, 0)
+                result["reasons"].append("CONSENSUS_warn_1fomo")
+            else:
+                # Aligned bullish = small boost
+                if avg_sentiment > 3 and result["direction"] == "LONG":
+                    result["confidence"] = min(result["confidence"] + 3, 100)
+                elif avg_sentiment < -3 and result["direction"] == "SHORT":
+                    result["confidence"] = min(result["confidence"] + 3, 100)
 
     # Claude pre-trade validation
     if result["direction"] in ("LONG", "SHORT") and result["confidence"] >= CONFIDENCE_MIN:
