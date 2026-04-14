@@ -20,6 +20,7 @@ from dotenv import load_dotenv
 from flask import Flask
 from alpha_signals import get_alpha_signal
 from sonar_sentiment import get_sonar_sentiment, sonar_signal_modifier
+from reddit_sentiment import reddit_sentiment_filter
 
 # ---------------------------------------------------------------------------
 # RETRY LOGIC - exponential backoff sur erreurs API transitoires
@@ -556,6 +557,23 @@ def analyze(symbol: str) -> dict:
         result["confidence"] = sonar_signal_modifier(result["confidence"], sonar)
         result["reasons"].append("Sonar:{}/{}".format(
             sonar.get("score", 0), sonar.get("summary", "?")[:40]))
+
+    # Reddit crowd sentiment
+    if result["direction"] in ("LONG", "SHORT"):
+        try:
+            r_ok, r_reason, r_score = reddit_sentiment_filter(symbol, asset_type="stock")
+            result["reasons"].append(r_reason)
+            if not r_ok:
+                result["direction"] = "HOLD"
+                result["reasons"].append("Reddit_VETO")
+            elif r_score != 0:
+                # Slight confidence adjustment based on crowd alignment
+                if (result["direction"] == "LONG" and r_score > 3) or (result["direction"] == "SHORT" and r_score < -3):
+                    result["confidence"] = min(result["confidence"] + 3, 100)
+                elif (result["direction"] == "LONG" and r_score < -3) or (result["direction"] == "SHORT" and r_score > 3):
+                    result["confidence"] = max(result["confidence"] - 5, 0)
+        except Exception as e:
+            log.warning("Reddit sentiment error: %s", e)
 
     # Claude pre-trade validation
     if result["direction"] in ("LONG", "SHORT") and result["confidence"] >= CONFIDENCE_MIN:
