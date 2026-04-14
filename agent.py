@@ -21,6 +21,7 @@ from flask import Flask
 from alpha_signals import get_alpha_signal
 from sonar_sentiment import get_sonar_sentiment, sonar_signal_modifier
 from reddit_sentiment import reddit_sentiment_filter, reddit_ticker_heatmap
+from twitter_sentiment import twitter_sentiment_filter
 
 # ---------------------------------------------------------------------------
 # RETRY LOGIC - exponential backoff sur erreurs API transitoires
@@ -574,6 +575,22 @@ def analyze(symbol: str) -> dict:
                     result["confidence"] = max(result["confidence"] - 5, 0)
         except Exception as e:
             log.warning("Reddit sentiment error: %s", e)
+
+    # Twitter/X sentiment
+    if result["direction"] in ("LONG", "SHORT"):
+        try:
+            t_ok, t_reason, t_score = twitter_sentiment_filter(symbol, asset_type="stock")
+            result["reasons"].append(t_reason)
+            if not t_ok:
+                result["direction"] = "HOLD"
+                result["reasons"].append("Twitter_VETO")
+            elif t_score != 0:
+                if (result["direction"] == "LONG" and t_score > 3) or (result["direction"] == "SHORT" and t_score < -3):
+                    result["confidence"] = min(result["confidence"] + 2, 100)
+                elif (result["direction"] == "LONG" and t_score < -3) or (result["direction"] == "SHORT" and t_score > 3):
+                    result["confidence"] = max(result["confidence"] - 3, 0)
+        except Exception as e:
+            log.warning("Twitter sentiment error: %s", e)
 
     # Claude pre-trade validation
     if result["direction"] in ("LONG", "SHORT") and result["confidence"] >= CONFIDENCE_MIN:
