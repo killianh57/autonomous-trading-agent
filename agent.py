@@ -20,7 +20,7 @@ from dotenv import load_dotenv
 from flask import Flask
 from alpha_signals import get_alpha_signal
 from sonar_sentiment import get_sonar_sentiment, sonar_signal_modifier
-from reddit_sentiment import reddit_sentiment_filter
+from reddit_sentiment import reddit_sentiment_filter, reddit_ticker_heatmap
 
 # ---------------------------------------------------------------------------
 # RETRY LOGIC - exponential backoff sur erreurs API transitoires
@@ -954,6 +954,23 @@ def morning_brief() -> None:
         else:
             lines.append("{}: {:.2f} USD".format(sym, price))
 
+    # Reddit trending tickers
+    try:
+        heat_stocks = reddit_ticker_heatmap("stock", limit=15)
+        heat_crypto = reddit_ticker_heatmap("crypto", limit=15)
+        if heat_stocks:
+            lines.append("\nReddit Trending Stocks:")
+            for t in heat_stocks[:5]:
+                lines.append("  {} | {} mentions | {:+.1f} | {}".format(
+                    t["ticker"], t["mentions"], t["avg_sentiment"], t["buzz"]))
+        if heat_crypto:
+            lines.append("\nReddit Trending Crypto:")
+            for t in heat_crypto[:5]:
+                lines.append("  {} | {} mentions | {:+.1f} | {}".format(
+                    t["ticker"], t["mentions"], t["avg_sentiment"], t["buzz"]))
+    except Exception as e:
+        log.warning("Reddit heatmap error in morning brief: %s", e)
+
     start = _state.get("daily_start_value", 0.0)
     if start > 0:
         lines.append("PnL journalier: {:.2f}%".format((total - start) / start * 100))
@@ -1059,7 +1076,7 @@ def _handle_command(text: str, chat_id) -> None:
             "/alpaca_resume   - Reprendre\n"
             "/alpaca_urgence  - Fermer toutes positions trade\n"
             "/alpaca_test     - Test achat+vente 2 USD SPY\n"
-            "/aide            - Aide\n/scan_sante      - Scan sante du code"
+            "/aide            - Aide\n/reddit          - Reddit trending tickers\n/scan_sante      - Scan sante du code"
         )
     elif text == "/alpaca_status":
         acc       = get_account()
@@ -1139,6 +1156,24 @@ def _handle_command(text: str, chat_id) -> None:
             time.sleep(3)
             sell = place_market_sell_full("SPY")
             reply = "Test OK: achat + vente SPY executes" if sell else "Test PARTIEL: achat OK, vente echouee"
+    elif text == "/reddit":
+        try:
+            heat_stocks = reddit_ticker_heatmap("stock", limit=15)
+            heat_crypto = reddit_ticker_heatmap("crypto", limit=15)
+            lines = ["Reddit Heatmap:"]
+            lines.append("\nStocks Trending:")
+            for t in (heat_stocks or [])[:8]:
+                lines.append("  {} | {} mentions | {:+.1f} | {}".format(
+                    t["ticker"], t["mentions"], t["avg_sentiment"], t["buzz"]))
+            lines.append("\nCrypto Trending:")
+            for t in (heat_crypto or [])[:8]:
+                lines.append("  {} | {} mentions | {:+.1f} | {}".format(
+                    t["ticker"], t["mentions"], t["avg_sentiment"], t["buzz"]))
+            if not heat_stocks and not heat_crypto:
+                lines.append("Aucun ticker trending detecte")
+            reply = "\n".join(lines)
+        except Exception as e:
+            reply = "Reddit heatmap erreur: {}".format(e)
     elif text == "/scan_sante":
         reply = _scan_sante()
 
