@@ -1281,7 +1281,7 @@ if __name__ == "__main__":
         import traceback as _tb, requests as _req, os as _os
         _err_text = type(_crash_err).__name__ + ": " + str(_crash_err)[:300]
         _trace = _tb.format_exc()[-600:]
-        _msg = "CRASH autonomous-trading-agent:\n" + _err_text + "\n\n" + _trace + "\nAuto-fix en cours..."
+        _msg = "CRASH autonomous-trading-agent:\n" + _err_text + "\n\n" + _trace
         try:
             send_telegram(_msg)
         except Exception:
@@ -1290,16 +1290,6 @@ if __name__ == "__main__":
             linear_create_ticket("CRASH " + __file__, str(_crash_err) + "\n\n" + _tb.format_exc()[-800:])
         except Exception:
             pass
-        try:
-            _gh_token = _os.getenv("GITHUB_TOKEN", "")
-            if _gh_token:
-                _req.post(
-                    "https://api.github.com/repos/killianh57/autonomous-trading-agent/actions/workflows/auto-fix.yml/dispatches",
-                    headers={"Authorization": "Bearer " + _gh_token, "Accept": "application/vnd.github+json"},
-                    json={"ref": "main"},
-                    timeout=10
-                )
-        except Exception:
-            pass
+        # Auto-fix workflow trigger REMOVED (was pushing hallucinated commits)
         raise
 
