@@ -281,29 +281,86 @@ def _headers() -> dict:
         "Content-Type":        "application/json",
     }
 
+# --- Rate-limit + retry helper (Alpaca basic plan: 200 req/min/account) ---
+# GET is idempotent -> retry on 429, 5xx, and network errors.
+# POST creates orders -> SAFER to only retry on 429 (which guarantees the
+# request was NOT processed). 5xx and network errors on POST fail fast
+# to avoid duplicate orders (no client_order_id dedup today).
+def _alpaca_request(method: str, url: str, payload: Optional[dict] = None,
+                    max_retries: int = 3) -> Optional[dict]:
+    import random
+    is_post = (method == "POST")
+    backoff = 1.0
+    for attempt in range(max_retries + 1):
+        try:
+            if method == "GET":
+                resp = requests.get(url, headers=_headers(), timeout=15)
+            elif method == "POST":
+                resp = requests.post(url, headers=_headers(), json=payload, timeout=15)
+            elif method == "DELETE":
+                resp = requests.delete(url, headers=_headers(), timeout=15)
+            else:
+                log.error("_alpaca_request: unsupported method %s", method)
+                return None
+
+            if resp.status_code in (200, 201, 204):
+                try:
+                    return resp.json()
+                except ValueError:
+                    return {}
+            # 429: always retry (server says request not processed)
+            if resp.status_code == 429:
+                retry_after = resp.headers.get("Retry-After")
+                wait = float(retry_after) if retry_after else backoff
+                log.warning("ALPACA 429 rate-limited on %s, sleeping %.1fs (attempt %d/%d)",
+                            url[-40:], wait, attempt + 1, max_retries + 1)
+                if attempt < max_retries:
+                    time.sleep(wait + random.uniform(0, 0.5))
+                    backoff *= 2
+                    continue
+                return None
+            # 5xx: retry only for GET (POST could have been processed -> dup risk)
+            if 500 <= resp.status_code < 600 and not is_post:
+                log.warning("ALPACA %s %s -> %d, retrying in %.1fs (attempt %d/%d)",
+                            method, url[-40:], resp.status_code, backoff,
+                            attempt + 1, max_retries + 1)
+                if attempt < max_retries:
+                    time.sleep(backoff + random.uniform(0, 0.3))
+                    backoff *= 2
+                    continue
+                log.error("ALPACA %s %s -> %d %s", method, url[-60:],
+                          resp.status_code, resp.text[:200])
+                return None
+            # 5xx on POST or any 4xx: fail fast
+            log.error("ALPACA %s %s -> %d %s", method, url[-60:],
+                      resp.status_code, resp.text[:200])
+            return None
+        except (requests.Timeout, requests.ConnectionError) as e:
+            # Network error on POST: fail fast (order could have been placed)
+            if is_post:
+                log.error("ALPACA POST network error, NOT retrying to avoid duplicate order: %s", e)
+                return None
+            # GET: safe to retry
+            log.warning("ALPACA GET network error: %s, retrying in %.1fs (attempt %d/%d)",
+                        e, backoff, attempt + 1, max_retries + 1)
+            if attempt < max_retries:
+                time.sleep(backoff + random.uniform(0, 0.3))
+                backoff *= 2
+                continue
+            log.error("ALPACA GET giving up after retries: %s", e)
+            return None
+        except Exception as e:
+            log.error("ALPACA %s unexpected error: %s", method, e)
+            return None
+    return None
+
 def alpaca_get(path: str, base: str = None) -> Optional[dict]:
     url = (base or TRADE_BASE_URL) + path
-    try:
-        resp = requests.get(url, headers=_headers(), timeout=15)
-        if resp.status_code == 200:
-            return resp.json()
-        log.error("ALPACA GET %s -> %d %s", path, resp.status_code, resp.text[:200])
-        return None
-    except Exception as e:
-        log.error("ALPACA GET error %s: %s", path, e)
-        return None
+    return _alpaca_request("GET", url)
 
 def alpaca_post(path: str, payload: dict) -> Optional[dict]:
     url = TRADE_BASE_URL + path
-    try:
-        resp = requests.post(url, headers=_headers(), json=payload, timeout=15)
-        if resp.status_code in (200, 201):
-            return resp.json()
-        log.error("ALPACA POST %s -> %d %s", path, resp.status_code, resp.text[:200])
-        return None
-    except Exception as e:
-        log.error("ALPACA POST error %s: %s", path, e)
-        return None
+    return _alpaca_request("POST", url, payload=payload)
 
 # ---------------------------------------------------------------------------
 # ACCOUNT & BALANCES
