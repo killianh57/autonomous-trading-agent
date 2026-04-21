@@ -255,10 +255,34 @@ def save_state() -> None:
 # ---------------------------------------------------------------------------
 # TELEGRAM
 # ---------------------------------------------------------------------------
+# Telegram rate-limit + ban-aware backoff (shared pattern with Bot 3).
+# Prevents the 2026-04-21 incident: retrying during a 429 ban RESETS the
+# retry_after timer, making the ban effectively permanent.
+_tg_lock = threading.Lock()
+_tg_banned_until = 0.0  # unix ts; 0 = not banned
+_tg_last_sent_ts = 0.0
+_TG_MIN_INTERVAL = 1.1
+_tg_dropped_during_ban = 0
+
 def send_telegram(msg: str) -> None:
+    """Rate-limited, ban-aware Telegram sender. Drops silently during ban."""
+    global _tg_banned_until, _tg_last_sent_ts, _tg_dropped_during_ban
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         log.warning("Telegram non configure (token=%s chat=%s)", bool(TELEGRAM_TOKEN), bool(TELEGRAM_CHAT_ID))
         return
+    now = time.time()
+    with _tg_lock:
+        # Silent drop during ban window
+        if now < _tg_banned_until:
+            _tg_dropped_during_ban += 1
+            return
+        wait = _TG_MIN_INTERVAL - (now - _tg_last_sent_ts)
+        if wait > 0:
+            time.sleep(wait)
+        _tg_last_sent_ts = time.time()
+    # Truncate to 4000 chars (Telegram hard limit 4096)
+    if len(msg) > 4000:
+        msg = msg[:3990] + "... [TRUNC]"
     try:
         url = "https://api.telegram.org/bot{}/sendMessage".format(TELEGRAM_TOKEN)
         resp = requests.post(
@@ -266,6 +290,18 @@ def send_telegram(msg: str) -> None:
             json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "HTML"},
             timeout=10,
         )
+        if resp.status_code == 429:
+            try:
+                data = resp.json()
+                retry_after = int(data.get("parameters", {}).get("retry_after", 60))
+            except Exception:
+                retry_after = 60
+            retry_after = min(retry_after, 3600)
+            with _tg_lock:
+                _tg_banned_until = time.time() + retry_after
+                _tg_dropped_during_ban = 0
+            log.warning("Telegram 429: banned for %ds, dropping subsequent messages silently", retry_after)
+            return
         if not resp.ok:
             log.error("Telegram erreur %d: %s", resp.status_code, resp.text[:300])
     except Exception as e:
