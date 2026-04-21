@@ -229,22 +229,28 @@ _state = {
     "daily_start_value": 0.0,
     "daily_loss_alerted": False,
 }
+# RLock: re-entrant so save_state() can be called from already-locked sections.
+# Protects _state dict + STATE_FILE writes against concurrent access from
+# scheduler thread, Flask health server thread, and Telegram polling thread.
+_state_lock = threading.RLock()
 
 def load_state() -> None:
-    if os.path.exists(STATE_FILE):
-        try:
-            with open(STATE_FILE, "r") as f:
-                saved = json.load(f)
-            _state.update(saved)
-        except Exception as e:
-            log.error("State load error: %s", e)
+    with _state_lock:
+        if os.path.exists(STATE_FILE):
+            try:
+                with open(STATE_FILE, "r") as f:
+                    saved = json.load(f)
+                _state.update(saved)
+            except Exception as e:
+                log.error("State load error: %s", e)
 
 def save_state() -> None:
-    try:
-        with open(STATE_FILE, "w") as f:
-            json.dump(_state, f, indent=2, default=str)
-    except Exception as e:
-        log.error("State save error: %s", e)
+    with _state_lock:
+        try:
+            with open(STATE_FILE, "w") as f:
+                json.dump(_state, f, indent=2, default=str)
+        except Exception as e:
+            log.error("State save error: %s", e)
 
 # ---------------------------------------------------------------------------
 # TELEGRAM
@@ -664,19 +670,25 @@ def has_enough_capital() -> bool:
     return True
 
 def check_daily_loss(portfolio_value: float) -> bool:
-    start = _state.get("daily_start_value", 0.0)
-    if start <= 0:
-        return False
-    loss_pct = (portfolio_value - start) / start
-    if loss_pct <= DAILY_LOSS_LIMIT and not _state.get("daily_loss_alerted"):
-        _state["paused"] = True
-        _state["daily_loss_alerted"] = True
-        save_state()
+    with _state_lock:
+        start = _state.get("daily_start_value", 0.0)
+        if start <= 0:
+            return False
+        loss_pct = (portfolio_value - start) / start
+        if loss_pct <= DAILY_LOSS_LIMIT and not _state.get("daily_loss_alerted"):
+            _state["paused"] = True
+            _state["daily_loss_alerted"] = True
+            save_state()
+            alert = True
+        else:
+            alert = False
+        paused = _state.get("paused", False)
+    if alert:
         msg = "Daily loss limit atteinte: {:.1f}% - Trading pause".format(loss_pct * 100)
         log.warning(msg)
         send_telegram(msg)
         return True
-    return _state.get("paused", False)
+    return paused
 
 # ---------------------------------------------------------------------------
 # ORDRES
@@ -782,9 +794,10 @@ def startup_audit() -> None:
     if total < MIN_CAPITAL_USD:
         lines.append("ATTENTION: capital < {:.0f} USD - mode lecture seule".format(MIN_CAPITAL_USD))
 
-    _state["daily_start_value"] = total
-    _state["daily_loss_alerted"] = False
-    save_state()
+    with _state_lock:
+        _state["daily_start_value"] = total
+        _state["daily_loss_alerted"] = False
+        save_state()
 
     msg = "\n".join(lines)
     log.info(msg)
@@ -1160,13 +1173,15 @@ def _handle_command(text: str, chat_id) -> None:
             ))
         reply = "\n".join(lines)
     elif text == "/alpaca_pause":
-        _state["paused"] = True
-        save_state()
+        with _state_lock:
+            _state["paused"] = True
+            save_state()
         reply = "Trading Alpaca mis en pause"
     elif text == "/alpaca_resume":
-        _state["paused"] = False
-        _state["daily_loss_alerted"] = False
-        save_state()
+        with _state_lock:
+            _state["paused"] = False
+            _state["daily_loss_alerted"] = False
+            save_state()
         reply = "Trading Alpaca repris"
     elif text == "/alpaca_urgence":
         closed = 0
